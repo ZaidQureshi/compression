@@ -91,9 +91,8 @@ int main(int argc, char** argv) {
 	std::chrono::duration<double> total = std::chrono::duration_cast<std::chrono::duration<double>>(total_end - total_start);
 	std::chrono::duration<double> comp = std::chrono::duration_cast<std::chrono::duration<double>>(compress_end - compress_start);
 	std::chrono::duration<double> wrt = std::chrono::duration_cast<std::chrono::duration<double>>(total_end - compress_end);
-	std::cout << "Total time: " << total.count() << " secs\n";
-	std::cout << "Compute time: " << comp.count() << " secs\n";
-	std::cout << "Write time: " << wrt.count() << " secs\n";
-	
-	std::cout << "Block Size: " << CHUNK_SIZE / 1024 << std::endl;
+	std::cout << (decomp ? "Decompress " : "Compress ") << "Total time: " << total.count() << " secs\n";
+	std::cout << (decomp ? "Decompress " : "Compress ") << "Compute time: " << comp.count() << " secs\n";
+	std::cout << (decomp ? "Decompress " : "Compress ") << "Write time: " << wrt.count() << " secs\n";
+	std::cout << (decomp ? "Decompress " : "Compress ") << "Block Size: " << CHUNK_SIZE / 1024 << "KB" << std::endl;
 }

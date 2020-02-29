@@ -3,19 +3,17 @@
 #include <thrust/execution_policy.h>
 #include <inttypes.h>
 
-#define _MIN(a,b) \
-({ __typeof__ (a) _a = (a); \
-    __typeof__ (b) _b = (b); \
-    _a < _b ? _a : _b; })
-    
 #define COMPRESSION_TYPE int64_t
 
-constexpr   uint64_t CHUNK_SIZE_() { return 1 * 1024; }
+constexpr   uint64_t CHUNK_SIZE_() { return 4 * 1024; }
 constexpr   uint16_t BLK_SIZE_() { return 1024; }
 constexpr   uint16_t MAX_LITERAL_SIZE_() { return 128; }
 constexpr   uint8_t  MINIMUM_REPEAT_() { return 3; }
 constexpr   uint8_t  MAXIMUM_REPEAT_() { return 127 + MINIMUM_REPEAT_(); }
-constexpr   uint64_t OUTPUT_CHUNK_SIZE_() { return CHUNK_SIZE_() + CHUNK_SIZE_()/ sizeof(COMPRESSION_TYPE) + 1; }
+constexpr   uint64_t OUTPUT_CHUNK_SIZE_() { return CHUNK_SIZE_() + CHUNK_SIZE_() / sizeof(COMPRESSION_TYPE) + CHUNK_SIZE_() / (MINIMUM_REPEAT_() * sizeof(COMPRESSION_TYPE)); }
+constexpr   int8_t   MIN_DELTA_() { return -128; }
+constexpr   int8_t   MAX_DELTA_() { return 127; }
+constexpr   int64_t  BASE_128_MASK_() { return 0x7f; }
 // constexpr   uint64_t OUTPUT_CHUNK_SIZE_() { return CHUNK_SIZE_() + (CHUNK_SIZE_() - 1) / MAX_LITERAL_SIZE_() + 1; }
 
 #define CHUNK_SIZE                CHUNK_SIZE_()
@@ -24,42 +22,29 @@ constexpr   uint64_t OUTPUT_CHUNK_SIZE_() { return CHUNK_SIZE_() + CHUNK_SIZE_()
 #define MINIMUM_REPEAT            MINIMUM_REPEAT_()
 #define MAXIMUM_REPEAT            MAXIMUM_REPEAT_()
 #define OUTPUT_CHUNK_SIZE         OUTPUT_CHUNK_SIZE_() //maximum output chunk size
-
-const int64_t MAX_DELTA = 127;
-const int64_t MIN_DELTA = -128;
-const int64_t BASE_128_MASK = 0x7f;
-
-#define SIZEOF_BYTE 8
-
-#define BYTE_TO_BINARY_PATTERN "%c%c%c%c%c%c%c%c\n"
-#define BYTE_TO_BINARY(byte)  \
-  (byte & 0x80 ? '1' : '0'), \
-  (byte & 0x40 ? '1' : '0'), \
-  (byte & 0x20 ? '1' : '0'), \
-  (byte & 0x10 ? '1' : '0'), \
-  (byte & 0x08 ? '1' : '0'), \
-  (byte & 0x04 ? '1' : '0'), \
-  (byte & 0x02 ? '1' : '0'), \
-  (byte & 0x01 ? '1' : '0') 
+#define MIN_DELTA                 MIN_DELTA_()
+#define MAX_DELTA                 MAX_DELTA_()
+#define BASE_128_MASK             BASE_128_MASK_()
 
 namespace irle {
     __host__ __device__ int8_t read_byte(uint8_t* &buf) {
         return *(buf++);
     }
 
-    __host__ __device__ uint64_t read_long(uint8_t* &in) {
-        uint64_t result = 0;
+    template <class T>
+    __host__ __device__ T read_int(uint8_t* &in) {
+        T result = 0;
         int64_t offset = 0;
         int8_t ch = read_byte(in);
         if (ch >= 0) {
-            result = static_cast<uint64_t>(ch);
+            result = static_cast<T>(ch);
         } else {
-            result = static_cast<uint64_t>(ch) & BASE_128_MASK;
+            result = static_cast<T>(ch) & BASE_128_MASK;
             while ((ch = read_byte(in)) < 0) {
-            offset += 7;
-            result |= (static_cast<uint64_t>(ch) & BASE_128_MASK) << offset;
+                offset += 7;
+                result |= (static_cast<T>(ch) & BASE_128_MASK) << offset;
             }
-            result |= static_cast<uint64_t>(ch) << (offset + 7);
+            result |= static_cast<T>(ch) << (offset + 7);
         }
         return result;
     }
@@ -67,48 +52,41 @@ namespace irle {
     template <class T>
     __host__ __device__ void decode(uint8_t* in, const uint64_t* ptr, const uint64_t tid, const uint64_t in_n_bytes, T* out) {
         uint64_t position = 0;
-        bool repeating = false;
+        bool repeat = false;
         in += ptr[tid];
         out += tid * CHUNK_SIZE / sizeof(T);
 
         int8_t delta;
-        uint64_t remainingValues = 0;
-        int64_t value;
+        uint64_t remaining = 0;
+        T value;
 
-        const uint64_t cur_chunk_size = _MIN(CHUNK_SIZE, in_n_bytes - tid * CHUNK_SIZE);
+        const uint64_t cur_chunk_size = min(CHUNK_SIZE, in_n_bytes - tid * CHUNK_SIZE);
 
         while (position < cur_chunk_size) {
-            // If we are out of values, read more.
-            if (remainingValues == 0) {
+            if (remaining == 0) {
                 int8_t ch = read_byte(in);
                 if (ch < 0) {
-                    remainingValues = static_cast<uint64_t>(-ch);
-                    repeating = false;
+                    remaining = static_cast<uint64_t>(-ch);
+                    repeat = false;
                 } else {
-                    remainingValues = static_cast<uint64_t>(ch) + MINIMUM_REPEAT;
-                    repeating = true;
+                    remaining = static_cast<uint64_t>(ch) + MINIMUM_REPEAT;
+                    repeat = true;
                     delta = read_byte(in);
-                    value = static_cast<int64_t>(read_long(in));
+                    value = read_int<T>(in);
                 }
             }
-            uint64_t count = _MIN(CHUNK_SIZE - position, remainingValues);
-            uint64_t consumed = 0;
-            if (repeating) {
+            uint64_t count = min(CHUNK_SIZE - position, remaining);
+            if (repeat) {
                 for (uint64_t i = 0; i < count; ++i) {
-                    if (tid == 1) break;
                     out[position + i] = value + static_cast<int64_t>(i) * delta;
                 }
-                consumed = count;
-            value += static_cast<int64_t>(consumed) * delta;
+                value += static_cast<int64_t>(count) * delta;
             } else {
                 for (uint64_t i = 0; i < count; ++i) {
-                    if (tid == 1) break;
-
-                    out[position + i] = static_cast<int64_t>(read_long(in));
+                    out[position + i] = read_int<T>(in);
                 }
-                consumed = count;
             }
-            remainingValues -= consumed;
+            remaining -= count;
             position += count;
         }
     }
@@ -126,16 +104,13 @@ namespace irle {
         /**
          * (c) Copyright [2014-2015] Hewlett-Packard Development Company, L.P
         */
-        #define write_byte(b) { \
-            cur_out[pos++] = b; \
-        }
-        #define write_ulong(val) { \
+        #define write_int(val) { \
             while (1) { \
                 if ((val & ~0x7f) == 0) { \
-                    write_byte(static_cast<uint8_t>(val)); \
+                    cur_out[pos++] = static_cast<uint8_t>(val); \
                     break; \
                 } else { \
-                    write_byte(static_cast<uint8_t>(0x80 | (val & 0x7f))); \
+                    cur_out[pos++] = static_cast<uint8_t>(0x80 | (val & 0x7f)); \
                     val = (static_cast<uint64_t>(val) >> 7); \
                 } \
             } \
@@ -143,13 +118,13 @@ namespace irle {
         #define write_out \
             if (num_literals != 0) { \
                 if (repeat) { \
-                    write_byte(static_cast<uint8_t>(static_cast<uint64_t>(num_literals) - MINIMUM_REPEAT)); \
-                    write_byte(static_cast<uint8_t>(delta)); \
-                    write_ulong(literals[0]); \
+                    cur_out[pos++] = static_cast<uint8_t>(num_literals - MINIMUM_REPEAT); \
+                    cur_out[pos++] = static_cast<uint8_t>(delta); \
+                    write_int(literals[0]); \
                 } else { \
-                    write_byte(static_cast<uint8_t>(-num_literals)); \
+                    cur_out[pos++] = static_cast<uint8_t>(-num_literals); \
                     for(size_t i=0; i < num_literals; ++i) \
-                        write_ulong(literals[i]); \
+                        write_int(literals[i]); \
                 } \
                 repeat = 0; \
                 num_literals = 0; \
@@ -157,13 +132,13 @@ namespace irle {
             }  
 
         const uint64_t offset_in = tid * CHUNK_SIZE;
-        const uint64_t in_n_digits = _MIN(in_n_bytes - offset_in, CHUNK_SIZE) / sizeof(T);
+        const uint64_t in_n_digits = min(in_n_bytes - offset_in, CHUNK_SIZE) / sizeof(T);
 
         const T* cur_in = in + offset_in / sizeof(T);
         // const T* cur_in = (const T*) ((void*)in + offset_in);
         uint8_t* cur_out = out + tid * OUTPUT_CHUNK_SIZE;
         uint64_t pos = 0;
-        uint64_t num_literals = 0, tail_run = 0;
+        uint16_t num_literals = 0, tail_run = 0;
         T literals[MAX_LITERAL_SIZE];
         bool repeat = false; 
         int64_t delta = 0;
@@ -175,57 +150,54 @@ namespace irle {
                 tail_run = 1;
             } else if (repeat) {
                 if (value == literals[0] + delta * static_cast<int64_t>(num_literals)) {
-                num_literals += 1;
-                if (num_literals == MAXIMUM_REPEAT) {
+                    num_literals += 1;
+                    if (num_literals < MAXIMUM_REPEAT) continue;
                     write_out;
-                }
                 } else {
-                write_out;
-                literals[num_literals++] = value;
-                tail_run = 1;
+                    write_out;
+                    literals[num_literals++] = value;
+                    tail_run = 1;
                 }
             } else {
                 if (tail_run == 1) {
-                delta = value - literals[num_literals - 1];
-                if (delta < MIN_DELTA || delta > MAX_DELTA) {
-                    tail_run = 1;
-                } else {
-                    tail_run = 2;
-                }
+                    delta = value - literals[num_literals - 1];
+                    if (delta < MIN_DELTA || delta > MAX_DELTA) {
+                        tail_run = 1;
+                    } else {
+                        tail_run = 2;
+                    }
                 } else if (value == literals[num_literals - 1] + delta) {
-                tail_run += 1;
+                    tail_run += 1;
                 } else {
-                delta = value - literals[num_literals - 1];
-                if (delta < MIN_DELTA || delta > MAX_DELTA) {
-                    tail_run = 1;
-                } else {
-                    tail_run = 2;
-                }
+                    delta = value - literals[num_literals - 1];
+                    if (delta < MIN_DELTA || delta > MAX_DELTA) {
+                        tail_run = 1;
+                    } else {
+                        tail_run = 2;
+                    }
                 }
                 if (tail_run == MINIMUM_REPEAT) {
-                if (num_literals + 1 == MINIMUM_REPEAT) {
-                    repeat = true;
-                    num_literals += 1;
+                    if (num_literals + 1 == MINIMUM_REPEAT) {
+                        repeat = true;
+                        num_literals += 1;
+                    } else {
+                        num_literals -= static_cast<int>(MINIMUM_REPEAT - 1);
+                        int64_t base = literals[num_literals];
+                        write_out;
+                        literals[0] = base;
+                        repeat = true;
+                        num_literals = MINIMUM_REPEAT;
+                    }
                 } else {
-                    num_literals -= static_cast<int>(MINIMUM_REPEAT - 1);
-                    int64_t base = literals[num_literals];
+                    literals[num_literals++] = value;
+                    if (num_literals < MAX_LITERAL_SIZE) continue;
                     write_out;
-                    literals[0] = base;
-                    repeat = true;
-                    num_literals = MINIMUM_REPEAT;
-                }
-                } else {
-                literals[num_literals++] = value;
-                if (num_literals == MAX_LITERAL_SIZE) {
-                    write_out;
-                }
                 }
             }
         }
         write_out;
         #undef write_out
-        #undef write_byte
-        #undef write_ulong
+        #undef write_int
 
         ptr[tid + 1] = pos;
     }
@@ -274,9 +246,13 @@ namespace irle {
 	    cuda_err_chk(cudaDeviceSynchronize());
 
         out = new T[exp_out_n_bytes / sizeof(T)];
-        cudaMemcpy(out, d_out, exp_out_n_bytes, cudaMemcpyDeviceToHost);
+        cuda_err_chk(cudaMemcpy(out, d_out, exp_out_n_bytes, cudaMemcpyDeviceToHost));
 
         *out_n_bytes = exp_out_n_bytes;
+
+        cudaFree(d_in);
+        cudaFree(d_ptr);
+        cudaFree(d_out);
     }
 
     template<class T>
