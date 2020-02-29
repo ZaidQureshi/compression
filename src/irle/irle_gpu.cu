@@ -10,6 +10,7 @@
 #include <sys/mman.h>
 #include <chrono>
 
+
 int main(int argc, char** argv) {
     if (argc < 3) {
 	std::cerr << "Please provide arguments\n";
@@ -58,15 +59,15 @@ int main(int argc, char** argv) {
 	void *out_1;
 	std::chrono::high_resolution_clock::time_point compress_start = std::chrono::high_resolution_clock::now();
 	if (!decomp) {
-		int64_t* in_ = (int64_t*) in;
+		COMPRESSION_TYPE* in_ = (COMPRESSION_TYPE*) in;
 		uint8_t *out_;
-		irle::compress_gpu<int64_t>(in_, out_, in_sb.st_size, &out_size);
+		irle::compress_gpu<COMPRESSION_TYPE>(in_, out_, in_sb.st_size, &out_size);
 		out_1 = (void*)out_;
 	}
 	else {
 		uint8_t* in_ = (uint8_t*) in;
-		int64_t *out_;
-		irle::decompress_gpu(in_, out_, in_sb.st_size, &out_size);
+		COMPRESSION_TYPE *out_;
+		irle::decompress_gpu<COMPRESSION_TYPE>(in_, out_, in_sb.st_size, &out_size);
 		out_1 = (void*)out_;
     }
 
@@ -93,5 +94,6 @@ int main(int argc, char** argv) {
 	std::cout << "Total time: " << total.count() << " secs\n";
 	std::cout << "Compute time: " << comp.count() << " secs\n";
 	std::cout << "Write time: " << wrt.count() << " secs\n";
-    
+	
+	std::cout << "Block Size: " << CHUNK_SIZE / 1024 << std::endl;
 }

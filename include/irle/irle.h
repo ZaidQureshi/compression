@@ -3,17 +3,20 @@
 #include <thrust/execution_policy.h>
 #include <inttypes.h>
 
- #define _MIN(a,b) \
-   ({ __typeof__ (a) _a = (a); \
-       __typeof__ (b) _b = (b); \
-     _a < _b ? _a : _b; })
+#define _MIN(a,b) \
+({ __typeof__ (a) _a = (a); \
+    __typeof__ (b) _b = (b); \
+    _a < _b ? _a : _b; })
+    
+#define COMPRESSION_TYPE int64_t
 
-constexpr   uint64_t CHUNK_SIZE_() { return 256 * 1024; }
+constexpr   uint64_t CHUNK_SIZE_() { return 1 * 1024; }
 constexpr   uint16_t BLK_SIZE_() { return 1024; }
 constexpr   uint16_t MAX_LITERAL_SIZE_() { return 128; }
 constexpr   uint8_t  MINIMUM_REPEAT_() { return 3; }
 constexpr   uint8_t  MAXIMUM_REPEAT_() { return 127 + MINIMUM_REPEAT_(); }
-constexpr   uint64_t OUTPUT_CHUNK_SIZE_() { return CHUNK_SIZE_() + (CHUNK_SIZE_() - 1) / MAX_LITERAL_SIZE_() + 1; }
+constexpr   uint64_t OUTPUT_CHUNK_SIZE_() { return CHUNK_SIZE_() + CHUNK_SIZE_()/ sizeof(COMPRESSION_TYPE) + 1; }
+// constexpr   uint64_t OUTPUT_CHUNK_SIZE_() { return CHUNK_SIZE_() + (CHUNK_SIZE_() - 1) / MAX_LITERAL_SIZE_() + 1; }
 
 #define CHUNK_SIZE                CHUNK_SIZE_()
 #define BLK_SIZE                  BLK_SIZE_()			  
@@ -25,6 +28,8 @@ constexpr   uint64_t OUTPUT_CHUNK_SIZE_() { return CHUNK_SIZE_() + (CHUNK_SIZE_(
 const int64_t MAX_DELTA = 127;
 const int64_t MIN_DELTA = -128;
 const int64_t BASE_128_MASK = 0x7f;
+
+#define SIZEOF_BYTE 8
 
 #define BYTE_TO_BINARY_PATTERN "%c%c%c%c%c%c%c%c\n"
 #define BYTE_TO_BINARY(byte)  \
@@ -38,14 +43,14 @@ const int64_t BASE_128_MASK = 0x7f;
   (byte & 0x01 ? '1' : '0') 
 
 namespace irle {
-    __host__ __device__ signed char read_byte(uint8_t* &buf) {
+    __host__ __device__ int8_t read_byte(uint8_t* &buf) {
         return *(buf++);
     }
 
     __host__ __device__ uint64_t read_long(uint8_t* &in) {
         uint64_t result = 0;
         int64_t offset = 0;
-        signed char ch = read_byte(in);
+        int8_t ch = read_byte(in);
         if (ch >= 0) {
             result = static_cast<uint64_t>(ch);
         } else {
@@ -59,22 +64,23 @@ namespace irle {
         return result;
     }
 
-    __host__ __device__ void decode(uint8_t* in, const uint64_t* ptr, const uint64_t tid, int64_t* out) {
+    template <class T>
+    __host__ __device__ void decode(uint8_t* in, const uint64_t* ptr, const uint64_t tid, const uint64_t in_n_bytes, T* out) {
         uint64_t position = 0;
         bool repeating = false;
         in += ptr[tid];
-        out += tid * CHUNK_SIZE;
+        out += tid * CHUNK_SIZE / sizeof(T);
 
-        signed char delta;
-
+        int8_t delta;
         uint64_t remainingValues = 0;
         int64_t value;
 
-        // skipNulls()
-        while (position < CHUNK_SIZE) {
+        const uint64_t cur_chunk_size = _MIN(CHUNK_SIZE, in_n_bytes - tid * CHUNK_SIZE);
+
+        while (position < cur_chunk_size) {
             // If we are out of values, read more.
             if (remainingValues == 0) {
-                signed char ch = read_byte(in);
+                int8_t ch = read_byte(in);
                 if (ch < 0) {
                     remainingValues = static_cast<uint64_t>(-ch);
                     repeating = false;
@@ -83,21 +89,21 @@ namespace irle {
                     repeating = true;
                     delta = read_byte(in);
                     value = static_cast<int64_t>(read_long(in));
-                    // printf("#dec#value: %ld\n", value);
                 }
             }
-            // How many do we read out of this block?
             uint64_t count = _MIN(CHUNK_SIZE - position, remainingValues);
             uint64_t consumed = 0;
             if (repeating) {
                 for (uint64_t i = 0; i < count; ++i) {
+                    if (tid == 1) break;
                     out[position + i] = value + static_cast<int64_t>(i) * delta;
                 }
-                
                 consumed = count;
             value += static_cast<int64_t>(consumed) * delta;
             } else {
                 for (uint64_t i = 0; i < count; ++i) {
+                    if (tid == 1) break;
+
                     out[position + i] = static_cast<int64_t>(read_long(in));
                 }
                 consumed = count;
@@ -105,43 +111,43 @@ namespace irle {
             remainingValues -= consumed;
             position += count;
         }
-        for (uint64_t i = 0; i < position; ++i) {
-            // printf("#dec#:%ld\n", out[i]);
-        }
     }
 
-    __global__ void kernel_decompress(uint8_t* in, const uint64_t* ptr, const uint64_t n_chunks, int64_t* out) {
+    template <class T>
+    __global__ void kernel_decompress(uint8_t* in, const uint64_t* ptr, const uint64_t n_chunks, const uint64_t in_n_bytes, T* out) {
         uint64_t tid = blockDim.x * blockIdx.x + threadIdx.x;
         if (tid < n_chunks) {
-            decode(in, ptr, tid, out);
+            decode(in, ptr, tid, in_n_bytes, out);
         }
     }
 
-    __host__ __device__ void encode(const uint64_t tid, const int64_t* in, const uint64_t in_n_bytes, uint8_t* out, uint64_t* ptr) {
+    template <class T>
+    __host__ __device__ void encode(const uint64_t tid, const T* in, const uint64_t in_n_bytes, uint8_t* out, uint64_t* ptr) {
         /**
          * (c) Copyright [2014-2015] Hewlett-Packard Development Company, L.P
         */
         #define write_byte(b) { \
             cur_out[pos++] = b; \
         }
-        #define write_ulong(val) \
+        #define write_ulong(val) { \
             while (1) { \
                 if ((val & ~0x7f) == 0) { \
-                    write_byte(static_cast<char>(val)); \
+                    write_byte(static_cast<uint8_t>(val)); \
                     break; \
                 } else { \
-                    write_byte(static_cast<char>(0x80 | (val & 0x7f))); \
+                    write_byte(static_cast<uint8_t>(0x80 | (val & 0x7f))); \
                     val = (static_cast<uint64_t>(val) >> 7); \
                 } \
-            } 
+            } \
+        } 
         #define write_out \
             if (num_literals != 0) { \
                 if (repeat) { \
-                    write_byte(static_cast<char>(static_cast<uint64_t>(num_literals) - MINIMUM_REPEAT)); \
-                    write_byte(static_cast<char>(delta)); \
+                    write_byte(static_cast<uint8_t>(static_cast<uint64_t>(num_literals) - MINIMUM_REPEAT)); \
+                    write_byte(static_cast<uint8_t>(delta)); \
                     write_ulong(literals[0]); \
                 } else { \
-                    write_byte(static_cast<char>(-num_literals)); \
+                    write_byte(static_cast<uint8_t>(-num_literals)); \
                     for(size_t i=0; i < num_literals; ++i) \
                         write_ulong(literals[i]); \
                 } \
@@ -150,16 +156,20 @@ namespace irle {
                 tail_run = 0; \
             }  
 
-        const int64_t* cur_in = in + tid * CHUNK_SIZE;
+        const uint64_t offset_in = tid * CHUNK_SIZE;
+        const uint64_t in_n_digits = _MIN(in_n_bytes - offset_in, CHUNK_SIZE) / sizeof(T);
+
+        const T* cur_in = in + offset_in / sizeof(T);
+        // const T* cur_in = (const T*) ((void*)in + offset_in);
         uint8_t* cur_out = out + tid * OUTPUT_CHUNK_SIZE;
         uint64_t pos = 0;
         uint64_t num_literals = 0, tail_run = 0;
-        int64_t literals[MAX_LITERAL_SIZE];
+        T literals[MAX_LITERAL_SIZE];
         bool repeat = false; 
         int64_t delta = 0;
 
-        for (uint64_t i=0; i<in_n_bytes; ++i) {
-            int64_t value = cur_in[i];
+        for (uint64_t i=0; i<in_n_digits; ++i) {
+            T value = cur_in[i];
             if (num_literals == 0) {
                 literals[num_literals++] = value;
                 tail_run = 1;
@@ -218,10 +228,6 @@ namespace irle {
         #undef write_ulong
 
         ptr[tid + 1] = pos;
-
-        // for (int i=0; i<pos; ++i) {
-        //     printf("#dec#: %d\n", out[i]);
-        // }
     }
 
     __global__ void kernel_shift(const uint8_t* in, const uint64_t* ptr, const uint32_t n_chunks, uint8_t* out) {
@@ -241,9 +247,10 @@ namespace irle {
         }
     }
 
-    __host__ void decompress_gpu(uint8_t* in, int64_t*& out, const uint64_t in_n_bytes, uint64_t *out_n_bytes) {
+    template<class T>
+    __host__ void decompress_gpu(uint8_t* in, T*& out, const uint64_t in_n_bytes, uint64_t *out_n_bytes) {
         uint8_t* d_in;
-        int64_t* d_out;
+        T* d_out;
 
         uint64_t* d_ptr;
 
@@ -251,8 +258,10 @@ namespace irle {
         uint32_t n_chunks = n_ptr - 1;
         uint64_t grid_size = ceil<uint64_t>(n_chunks, BLK_SIZE);
 
-        uint64_t header_byte = n_ptr * sizeof(uint64_t) + sizeof(uint32_t);
+        uint64_t header_byte = n_ptr * sizeof(uint64_t) + sizeof(uint32_t) + sizeof(uint64_t);
         uint64_t data_byte = in_n_bytes - header_byte;
+
+        uint64_t exp_out_n_bytes = *(uint64_t*)(in + header_byte - sizeof(uint64_t));
 
         cuda_err_chk(cudaMalloc((void**)&d_in, data_byte));
         cuda_err_chk(cudaMalloc((void**)&d_ptr, sizeof(uint64_t) * n_ptr));
@@ -260,12 +269,13 @@ namespace irle {
         cuda_err_chk(cudaMemcpy(d_ptr, in + sizeof(uint32_t), sizeof(uint64_t) * n_ptr, cudaMemcpyHostToDevice));
         cuda_err_chk(cudaMalloc((void**)&d_out, n_chunks * CHUNK_SIZE));
 
-        kernel_decompress<<<grid_size, BLK_SIZE>>>(d_in, d_ptr, n_chunks, d_out);
+        kernel_decompress<<<grid_size, BLK_SIZE>>>(d_in, d_ptr, n_chunks, exp_out_n_bytes, d_out);
 
-        uint64_t exp_out_n_bytes = n_chunks * CHUNK_SIZE;
-        out = new int64_t[exp_out_n_bytes / sizeof(int64_t)];
+	    cuda_err_chk(cudaDeviceSynchronize());
 
+        out = new T[exp_out_n_bytes / sizeof(T)];
         cudaMemcpy(out, d_out, exp_out_n_bytes, cudaMemcpyDeviceToHost);
+
         *out_n_bytes = exp_out_n_bytes;
     }
 
@@ -285,64 +295,24 @@ namespace irle {
         cuda_err_chk(cudaMemcpy(d_in, in, in_n_bytes, cudaMemcpyHostToDevice));
 
         kernel_compress<T><<<grid_size, BLK_SIZE>>>(d_in, in_n_bytes, n_chunks, d_inter, d_ptr);
+        cuda_err_chk(cudaDeviceSynchronize());
+        
         thrust::inclusive_scan(thrust::device, d_ptr, d_ptr + n_chunks + 1, d_ptr);
-
         cuda_err_chk(cudaMemcpy(&data_n_bytes, d_ptr + n_chunks, sizeof(uint64_t), cudaMemcpyDeviceToHost));
+
         cuda_err_chk(cudaMalloc((void**)&d_out, data_n_bytes * sizeof(uint8_t)));
         
         kernel_shift<<<grid_size, BLK_SIZE>>>(d_inter, d_ptr, n_chunks, d_out);
         
-        exp_out_n_bytes = sizeof(uint32_t) + sizeof(uint64_t) * (uint64_t) + data_n_bytes;
+        exp_out_n_bytes = sizeof(uint32_t) + sizeof(uint64_t) * (n_chunks + 1) + data_n_bytes + sizeof(uint64_t);
         out = new uint8_t[exp_out_n_bytes];
         uint64_t ptr_len = sizeof(uint64_t) * (n_chunks + 1);
         *(uint32_t*)out = n_chunks + 1;
 
         cuda_err_chk(cudaMemcpy(out + sizeof(uint32_t), d_ptr, sizeof(uint64_t) * (n_chunks + 1), cudaMemcpyDeviceToHost));
-        cuda_err_chk(cudaMemcpy(out + sizeof(uint32_t) + ptr_len, d_out, data_n_bytes, cudaMemcpyDeviceToHost));
 
-	    cuda_err_chk(cudaDeviceSynchronize());
-
-        // printf("#out#: %d\n", *((uint32_t*)out));
-
-        // for (int i=0; i<2; ++i) {
-        //     printf("#out#: %d\n", *((uint64_t*)(out + sizeof(uint32_t) + i * sizeof(uint64_t))));
-        // }
-        // uint32_t n_digits = in_n_bytes / sizeof(T);
-
-        // for (int i=0; i<n_digits; ++i) {
-        //     printf("#raw# %lX %ld\n", in[i], in[i]);
-
-        // }
-
-        // T  *d_decode, *h_out;
-
-        // uint64_t n_digits = in_n_bytes / sizeof(uint64_t);
-
-        // cudaMalloc((void**)&d_decode, in_n_bytes);
-        // // printf("BYTES: %ld\n", in_n_bytes);
-        // // kernel_compress<<<1, 1>>>(d_in, d_out, in_n_bytes);
-        // kernel_decompress<<<1, 1>>>(d_out, d_decode, in_n_bytes);
-        // cudaDeviceSynchronize();
-        // h_out = new T[n_digits];
-        // cudaMemcpy(h_out, d_decode, in_n_bytes, cudaMemcpyDeviceToHost);
-        // int i;
-        // for (i=0; i<n_digits; ++i) {
-        //     if (h_out[i]  != in[i]) {
-        //         printf("BREAK: %d\n", i);
-        //         break;
-        //     }
-        // }
-
-        // for (int i=0; i<n_digits; ++i) {
-        //     printf("#cmp# %lX %lx\n", h_out[i], in[i]);
-
-        // }
-
-        // cudaFree(d_in);
-        // cudaFree(d_decode);
-        // cudaFree(d_out);
-
-        // delete[] h_out;
+        *(uint64_t*)(out + sizeof(uint32_t) + ptr_len) = in_n_bytes;
+        cuda_err_chk(cudaMemcpy(out + sizeof(uint32_t) + ptr_len + sizeof(uint64_t), d_out, data_n_bytes, cudaMemcpyDeviceToHost));
 
         cuda_err_chk(cudaFree(d_in));
         cuda_err_chk(cudaFree(d_inter));
