@@ -50,7 +50,7 @@ constexpr uint8_t __CLOSEST_ALIGNED_FIXED_BIT_MAP[65] = {
 }; 
 
 constexpr   uint16_t BLK_SIZE_()                { return (32); }
-constexpr   uint64_t CHUNK_SIZE_()              { return (1024 * 32); }
+constexpr   uint64_t CHUNK_SIZE_()              { return (1024 * 4); }
 constexpr   uint32_t INPUT_BUFFER_SIZE()        { return (32); }
 constexpr   uint16_t MAX_LITERAL_SIZE_()        { return 128; }
 constexpr   uint8_t  MINIMUM_REPEAT_()          { return 3; }
@@ -140,7 +140,7 @@ inline void initialize_bit_maps() {
     cudaMemcpyToSymbol(device_closest_aligned_bit_map, &__CLOSEST_ALIGNED_FIXED_BIT_MAP, 65 * sizeof(uint8_t));
     cudaMemcpyToSymbol(device_decode_bit_map, &__BIT_WIDTH_DECODE_MAP, 32 * sizeof(uint8_t));
 }
-constexpr int DECODE_BUFFER_COUNT = 128;
+constexpr int DECODE_BUFFER_COUNT = 64;
 constexpr int DECODE_BUFFER4_COUNT = DECODE_BUFFER_COUNT / 4;
 constexpr int SHM_BUFFER_COUNT = DECODE_BUFFER_COUNT * BLK_SIZE;
 

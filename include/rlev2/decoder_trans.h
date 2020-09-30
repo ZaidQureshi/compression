@@ -323,7 +323,7 @@ __device__ void clock_sleep(clock_value_t sleep_cycles)
 	template <int READ_UNIT>
 	__global__ void decompress_func_read_sync(const uint8_t* __restrict__ in, const uint64_t n_chunks, const blk_off_t* __restrict__ blk_off, const col_len_t* __restrict__ col_len, int64_t* __restrict__ out) {
 		__shared__ uint8_t in_[BLK_SIZE][DECODE_BUFFER_COUNT];
-		__shared__ cuda::atomic<int16_t, cuda::thread_scope_block> in_cnt_[BLK_SIZE];
+		__shared__ cuda::atomic<uint8_t, cuda::thread_scope_block> in_cnt_[BLK_SIZE];
 
 		int tid = threadIdx.x;
 		int cid = blockIdx.x;
@@ -378,11 +378,11 @@ __device__ void clock_sleep(clock_value_t sleep_cycles)
 			uint8_t *in_ptr_ = &(in_[tid][0]);
 			
 			uint8_t out_buffer_ptr = 0;
-			// int64_t out_buffer[WRITE_VEC_SIZE];
+			int64_t out_buffer[WRITE_VEC_SIZE];
 
 
 			auto read_byte = [&]() {
-				while (in_cnt_[tid].load(cuda::memory_order_acquire) <= 0) {
+				while (in_cnt_[tid].load(cuda::memory_order_acquire) == 0) {
 					__nanosleep(1000);
 				}
 
@@ -400,23 +400,22 @@ __device__ void clock_sleep(clock_value_t sleep_cycles)
 			};
 
 			auto write_int = [&](int64_t i) {
+				
 				*(out_8B + out_buffer_ptr) = i; 
 				out_buffer_ptr ++;
 				if (out_buffer_ptr == READ_UNIT) {
 					out_buffer_ptr = 0;
 					out_8B += BLK_SIZE * READ_UNIT;
 				}
-				// out_buffer[out_buffer_ptr] = i;
-				// out_buffer_ptr = (out_buffer_ptr + 1) % WRITE_VEC_SIZE;
-
-				// if (out_buffer_ptr == 0) {
-				// 	#pragma unroll
-				// 	for (int i=0; i<WRITE_VEC_SIZE; ++i) {
-				// 		(reinterpret_cast<long4*>(out_8B))[i] = (reinterpret_cast<long4*>(out_buffer))[i];
-				// 	}
-					
-				// 	out_8B += BLK_SIZE * READ_UNIT;
-				// }
+				
+				/*
+				out_buffer[out_buffer_ptr] = i;
+				out_buffer_ptr = (out_buffer_ptr + 1) % WRITE_VEC_SIZE;
+				if (out_buffer_ptr == 0) {
+					*reinterpret_cast<long4*>(out_8B) = *reinterpret_cast<long4*>(out_buffer);
+					out_8B += BLK_SIZE * READ_UNIT;
+				}
+				*/
 				
 			};
 
@@ -438,6 +437,12 @@ __device__ void clock_sleep(clock_value_t sleep_cycles)
 			};
 			
 			while (used_bytes < mychunk_size) {
+				/*
+				bool compute = used_bytes < mychunk_size;
+				unsigned compute_sync = __ballot_sync(0xffffffff, compute);
+				
+				if (!compute) break;
+				*/
 				auto first = read_byte();
 				switch(first & HEADER_MASK) {
 				case HEADER_SHORT_REPEAT: {
