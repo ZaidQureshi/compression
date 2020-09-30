@@ -5,8 +5,8 @@
 #define ERR_CHUNK 0
 
 // #define DEBUG
-
-constexpr int READ_GRANULARITY = 1;
+constexpr int WRITE_VEC_SIZE = 4;
+constexpr int READ_GRANULARITY = 4;
 constexpr int DECODE_UNIT = 4; 
 constexpr uint64_t VARINT_MASK = 0x7f;
 
@@ -141,6 +141,7 @@ inline void initialize_bit_maps() {
     cudaMemcpyToSymbol(device_decode_bit_map, &__BIT_WIDTH_DECODE_MAP, 32 * sizeof(uint8_t));
 }
 constexpr int DECODE_BUFFER_COUNT = 128;
+constexpr int DECODE_BUFFER4_COUNT = DECODE_BUFFER_COUNT / 4;
 constexpr int SHM_BUFFER_COUNT = DECODE_BUFFER_COUNT * BLK_SIZE;
 
 #endif
