@@ -348,20 +348,26 @@ __device__ void clock_sleep(clock_value_t sleep_cycles)
 // if (tid == ERR_THREAD) printf("thrad %d with chunksize %u\n", tid, mychunk_size);
 			const uint32_t t_read_mask = (0xffffffff >> (32 - tid));
 			while (true) {
-				while (in_cnt_[tid].load(cuda::memory_order_acquire) + 4 > DECODE_BUFFER_COUNT) {
-					__nanosleep(1000);
-				}
-
 				bool read = used_bytes < mychunk_size;
 				unsigned read_sync = __ballot_sync(0xffffffff, read);
-				if (!read) break;
 
-				*(uint32_t *)(&in_[tid][in_tail_]) = in_4B[in_4B_off + __popc(read_sync & t_read_mask)];
-				in_cnt_[tid].fetch_add(4, cuda::memory_order_release);
+				if (read) {
+					while (in_cnt_[tid].load(cuda::memory_order_acquire) + 4 > DECODE_BUFFER_COUNT) {
+						__nanosleep(1000);
+					}
 
-				in_tail_ = (in_tail_ + 1) % (DECODE_BUFFER_COUNT / 4);
-				in_4B_off += __popc(read_sync);
-				used_bytes += 4;
+					__syncwarp(read_sync);
+
+					*(uint32_t*)(&in_[tid][in_tail_]) = in_4B[in_4B_off + __popc(read_sync & t_read_mask)];  
+					in_cnt_[tid].fetch_add(4, cuda::memory_order_release);
+
+					in_tail_ = (in_tail_ + 4) % DECODE_BUFFER_COUNT;
+					in_4B_off += __popc(read_sync);
+					used_bytes += 4;
+				} else {
+					break;
+				}
+// printf("thread %d waiting with mask %u with READ count %u\n", tid, read_sync, used_bytes);
 			}
 		} else if (which == 1) { // compute warp
 
@@ -369,47 +375,49 @@ __device__ void clock_sleep(clock_value_t sleep_cycles)
 			int64_t* out_8B = out + (out_start_idx + tid * READ_UNIT); 
 
 			uint8_t in_head_ = 0;
-			uint8_t curr_write_offset = 0;
+			uint8_t *in_ptr_ = &(in_[tid][0]);
+			
+			uint8_t out_buffer_ptr = 0;
+			// int64_t out_buffer[WRITE_VEC_SIZE];
 
-			uint8_t *input_buffer = &in_[tid][0];
 
 			auto read_byte = [&]() {
 				while (in_cnt_[tid].load(cuda::memory_order_acquire) <= 0) {
 					__nanosleep(1000);
 				}
 
-	
-				// auto curr32 = in_[in_head_ / 4][tid].load(cuda::memory_order_acquire);
+				// auto curr32 = in_[tid][in_head_ / 4].load(cuda::memory_order_relaxed);
 				// auto ret = ((uint8_t*)&curr32)[in_head_%4];
-				auto ret = input_buffer[in_head_];
+
+				auto ret = in_ptr_[in_head_];
 // #ifdef DEBUG
 // if (tid == ERR_THREAD) printf("read[%u]: %x\n", curr_head, ((uint8_t*)&curr32)[curr_head%4]);
 // #endif
 				in_head_ = (in_head_ + 1) % DECODE_BUFFER_COUNT;
 				in_cnt_[tid].fetch_sub(1, cuda::memory_order_release);
-				
 				used_bytes += 1;
-
 				return ret;
 			};
 
 			auto write_int = [&](int64_t i) {
-				*(out_8B + curr_write_offset) = i; 
-				curr_write_offset ++;
-				if (curr_write_offset == READ_UNIT) {
-					curr_write_offset = 0;
+				*(out_8B + out_buffer_ptr) = i; 
+				out_buffer_ptr ++;
+				if (out_buffer_ptr == READ_UNIT) {
+					out_buffer_ptr = 0;
 					out_8B += BLK_SIZE * READ_UNIT;
 				}
-
 				// out_buffer[out_buffer_ptr] = i;
-				// out_buffer_ptr = (out_buffer_ptr + 1) % READ_GRANULARITY;
-				// if (out_buffer_ptr == 0) {
-				// 	for (int i=0; i<WRITE_VEC_SIZE; ++i) {
-				// 		reinterpret_cast<longlong4*>(out_8B)[i] = reinterpret_cast<longlong4*>(out_buffer)[i];
-				// 	}
+				// out_buffer_ptr = (out_buffer_ptr + 1) % WRITE_VEC_SIZE;
 
-				// 	out_8B += WRITE_VEC_SIZE * sizeof(int64_t);
+				// if (out_buffer_ptr == 0) {
+				// 	#pragma unroll
+				// 	for (int i=0; i<WRITE_VEC_SIZE; ++i) {
+				// 		(reinterpret_cast<long4*>(out_8B))[i] = (reinterpret_cast<long4*>(out_buffer))[i];
+				// 	}
+					
+				// 	out_8B += BLK_SIZE * READ_UNIT;
 				// }
+				
 			};
 
 			auto read_uvarint = [&]() {
@@ -429,7 +437,7 @@ __device__ void clock_sleep(clock_value_t sleep_cycles)
 				return ret >> 1 ^ -(ret & 1);
 			};
 			
-			while (true) {
+			while (used_bytes < mychunk_size) {
 				auto first = read_byte();
 				switch(first & HEADER_MASK) {
 				case HEADER_SHORT_REPEAT: {
