@@ -6,7 +6,7 @@
 
 // #define DEBUG
 constexpr int WRITE_VEC_SIZE = 4;
-constexpr int READ_GRANULARITY = 4;
+constexpr int READ_GRANULARITY = 8;
 constexpr int DECODE_UNIT = 4; 
 constexpr uint64_t VARINT_MASK = 0x7f;
 

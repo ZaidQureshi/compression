@@ -372,22 +372,21 @@ __device__ void clock_sleep(clock_value_t sleep_cycles)
 // printf("thread %d waiting with mask %u with READ count %u\n", tid, read_sync, used_bytes);
 			}
 		} else if (which == 1) { // compute warp
-
-			uint64_t out_start_idx = cid * CHUNK_SIZE / sizeof(int64_t);
-			int64_t* out_8B = out + (out_start_idx + tid * READ_UNIT); 
+			int64_t* out_8B = out + (cid * CHUNK_SIZE / sizeof(int64_t) + tid * READ_UNIT); 
 
 			uint8_t in_head_ = 0;
 			uint8_t *in_ptr_ = &(in_[tid][0]);
-			
 			uint8_t out_buffer_ptr = 0;
-			
-			auto queue_int = [&](int64_t i) {
-
-			};
+			uint8_t out_counter = 0;
 
 			auto deque_int = [&]() {
-				*reinterpret_cast<longlong4*>(out_8B) = *reinterpret_cast<longlong4*>(out_buffer[tid]);
-				out_8B += BLK_SIZE * READ_UNIT;
+				*reinterpret_cast<longlong4*>(out_8B + out_counter) = *reinterpret_cast<longlong4*>(out_buffer[tid]);
+				
+				out_counter += WRITE_VEC_SIZE;
+				if (out_counter == READ_UNIT) {
+					out_counter = 0;
+					out_8B += BLK_SIZE * READ_UNIT;
+				}    
 				out_buffer_ptr = 0;
 			};
 
