@@ -325,6 +325,8 @@ __device__ void clock_sleep(clock_value_t sleep_cycles)
 		__shared__ uint8_t in_[BLK_SIZE][DECODE_BUFFER_COUNT];
 		__shared__ cuda::atomic<uint8_t, cuda::thread_scope_block> in_cnt_[BLK_SIZE];
 
+		__shared__ int64_t out_buffer[BLK_SIZE][WRITE_VEC_SIZE];
+
 		int tid = threadIdx.x;
 		int cid = blockIdx.x;
 		int which = threadIdx.y;
@@ -378,12 +380,47 @@ __device__ void clock_sleep(clock_value_t sleep_cycles)
 			uint8_t *in_ptr_ = &(in_[tid][0]);
 			
 			uint8_t out_buffer_ptr = 0;
-			int64_t out_buffer[WRITE_VEC_SIZE];
+			
+			auto queue_int = [&](int64_t i) {
 
+			};
 
+			auto deque_int = [&]() {
+				*reinterpret_cast<longlong4*>(out_8B) = *reinterpret_cast<longlong4*>(out_buffer[tid]);
+				out_8B += BLK_SIZE * READ_UNIT;
+				out_buffer_ptr = 0;
+			};
+
+			auto write_int = [&](int64_t i) {
+				
+				// *(out_8B + out_buffer_ptr) = i; 
+				// out_buffer_ptr ++;
+				// if (out_buffer_ptr == READ_UNIT) {
+				// 	out_buffer_ptr = 0;
+				// 	out_8B += BLK_SIZE * READ_UNIT;
+				// }
+				
+				if (out_buffer_ptr == WRITE_VEC_SIZE) {
+					deque_int();
+				}
+
+				out_buffer[tid][out_buffer_ptr++] = i;
+				// out_buffer_ptr = (out_buffer_ptr + 1) % WRITE_VEC_SIZE;
+				// if (out_buffer_ptr == 0) {
+				// 	*reinterpret_cast<longlong4*>(out_8B) = *reinterpret_cast<longlong4*>(out_buffer[tid]);
+				// 	out_8B += BLK_SIZE * READ_UNIT;
+				// }
+				
+			};
+			
 			auto read_byte = [&]() {
 				while (in_cnt_[tid].load(cuda::memory_order_acquire) == 0) {
-					__nanosleep(1000);
+					// __nanosleep(1000);
+					
+					if (out_buffer_ptr == WRITE_VEC_SIZE) {
+						deque_int();
+					}
+					
 				}
 
 				// auto curr32 = in_[tid][in_head_ / 4].load(cuda::memory_order_relaxed);
@@ -397,26 +434,6 @@ __device__ void clock_sleep(clock_value_t sleep_cycles)
 				in_cnt_[tid].fetch_sub(1, cuda::memory_order_release);
 				used_bytes += 1;
 				return ret;
-			};
-
-			auto write_int = [&](int64_t i) {
-				
-				*(out_8B + out_buffer_ptr) = i; 
-				out_buffer_ptr ++;
-				if (out_buffer_ptr == READ_UNIT) {
-					out_buffer_ptr = 0;
-					out_8B += BLK_SIZE * READ_UNIT;
-				}
-				
-				/*
-				out_buffer[out_buffer_ptr] = i;
-				out_buffer_ptr = (out_buffer_ptr + 1) % WRITE_VEC_SIZE;
-				if (out_buffer_ptr == 0) {
-					*reinterpret_cast<long4*>(out_8B) = *reinterpret_cast<long4*>(out_buffer);
-					out_8B += BLK_SIZE * READ_UNIT;
-				}
-				*/
-				
 			};
 
 			auto read_uvarint = [&]() {
@@ -593,6 +610,9 @@ __device__ void clock_sleep(clock_value_t sleep_cycles)
 					}
 				} break;
 				}
+			}
+			if (out_buffer_ptr > 0) {
+				deque_int();
 			}
 		}
     }
