@@ -483,8 +483,6 @@ namespace rlev2 {
     
     __host__ __device__ 
     void writePatchedBasedValues(encode_info<>& info, patch_blob& pb) {
-        printf("write patched base\n");
-
         uint32_t& varlen = info.var_runlen;
         varlen -= 1;
         const uint8_t headerFirstByte = static_cast<uint8_t>(

@@ -5,14 +5,6 @@
 
 #include <cuda/atomic>
 
-#include "decompress_write_sync.h"
-// constexpr int DECODE_BUFFER_COUNT = 256;
-// constexpr int SHM_BUFFER_COUNT = DECODE_BUFFER_COUNT * BLK_SIZE;
-//constexpr int DECODE_BUFFER_COUNT = 256;
-//constexpr int SHM_BUFFER_COUNT = DECODE_BUFFER_COUNT * BLK_SIZE;
-
-using clock_value_t = long long;
-
 namespace rlev2 {
 	template <int READ_UNIT>
 	__global__ void decompress_func_template(const uint8_t* __restrict__ in, const uint64_t n_chunks, const blk_off_t* __restrict__ blk_off, const col_len_t* __restrict__ col_len, int64_t* __restrict__ out) {
@@ -312,14 +304,6 @@ namespace rlev2 {
 
     }
 
-__device__ void clock_sleep(clock_value_t sleep_cycles)
-{
-    clock_value_t start = clock64();
-    clock_value_t cycles_elapsed;
-    do { cycles_elapsed = clock64() - start; } 
-    while (cycles_elapsed < sleep_cycles);
-}
-
 	template <int READ_UNIT>
 	__global__ void decompress_func_read_sync(const uint8_t* __restrict__ in, const uint64_t n_chunks, const blk_off_t* __restrict__ blk_off, const col_len_t* __restrict__ col_len, int64_t* __restrict__ out) {
 		__shared__ uint8_t in_[BLK_SIZE][DECODE_BUFFER_COUNT];
@@ -373,6 +357,7 @@ __device__ void clock_sleep(clock_value_t sleep_cycles)
 			}
 		} else if (which == 1) { // compute warp
 			int64_t* out_8B = out + (cid * CHUNK_SIZE / sizeof(int64_t) + tid * READ_UNIT); 
+			uint32_t out_ptr = 0;
 
 			uint8_t in_head_ = 0;
 			uint8_t *in_ptr_ = &(in_[tid][0]);
@@ -391,7 +376,7 @@ __device__ void clock_sleep(clock_value_t sleep_cycles)
 			};
 
 			auto write_int = [&](int64_t i) {
-				
+				out_ptr ++;
 				// *(out_8B + out_buffer_ptr) = i; 
 				// out_buffer_ptr ++;
 				// if (out_buffer_ptr == READ_UNIT) {
@@ -556,13 +541,12 @@ __device__ void clock_sleep(clock_value_t sleep_cycles)
 
 					uint16_t patch_mask = (static_cast<uint16_t>(1) << pw) - 1;
 
-					auto base_out = out_8B;
+					uint32_t base_out_ptr = out_ptr;
 
 					int64_t base_val = 0 ;
-					for (int i=bw-1; i>=0; --i) {
-						base_val |= (read_byte() << (fbw * 8));
+					while (bw-- > 0) {
+						base_val |= ((int64_t)read_byte() << (bw * 8));
 					}
-
 					uint8_t bits_left = 0 /* bits left over from unused bits of last byte */, curr_byte = 0;
 					while (len-- > 0) {
 						uint64_t result = 0;
@@ -585,11 +569,11 @@ __device__ void clock_sleep(clock_value_t sleep_cycles)
 					}
 
 					bits_left = 0, curr_byte = 0;
-					fbw = get_closest_bit(pw + pgw);
+					uint8_t cfb = get_closest_bit(pw + pgw);
 					int patch_gap = 0;
 					while (pll-- > 0) {
 						uint64_t result = 0;
-						uint8_t bits_to_read = fbw;
+						uint8_t bits_to_read = cfb;
 						while (bits_to_read > bits_left) {
 							result <<= bits_left;
 							result |= curr_byte & ((1 << bits_left) - 1);
@@ -605,7 +589,23 @@ __device__ void clock_sleep(clock_value_t sleep_cycles)
 						}
 
 						patch_gap += result >> pw;
-						base_out[(patch_gap / READ_UNIT) * BLK_SIZE + (patch_gap % READ_UNIT)] |= static_cast<int64_t>(result & patch_mask) << fbw;
+						uint32_t direct_out_ptr = base_out_ptr + patch_gap;
+
+						// It is not possible to have PATCHED BASE ENCODING WITH size < 4(WRITE_VEC_SIZE)
+						// if (virtual_offset < WRITE_VEC_SIZE) {
+						// 	// still in local buffer
+						// 	out_buffer[tid][virtual_offset % WRITE_VEC_SIZE] |= static_cast<int64_t>(result & patch_mask) << fbw;
+						// } else {
+
+						if (out_ptr - direct_out_ptr >= WRITE_VEC_SIZE || out_buffer_ptr == 0) {
+							out[(direct_out_ptr / READ_UNIT) * BLK_SIZE * READ_UNIT + (direct_out_ptr % READ_UNIT) + tid * READ_UNIT] |= static_cast<int64_t>(result & patch_mask) << fbw;
+						} else {
+							out_buffer[tid][direct_out_ptr % WRITE_VEC_SIZE] |= static_cast<int64_t>(result & patch_mask) << fbw;
+						}
+						
+						// }
+						// auto index = (patch_gap / READ_UNIT) * BLK_SIZE + (patch_gap % READ_UNIT);
+						// Needs to determine whether the index is still in local bufer or global mem
 					}
 				} break;
 				}
