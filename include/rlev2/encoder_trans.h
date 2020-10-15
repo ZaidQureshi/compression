@@ -167,16 +167,16 @@ if (!should_write) {
     }
 }
 
-#ifdef DEBUG
-if (should_write && tid == ERR_THREAD) {
-    // for (int i=0; i<info.potision; i+=4) {
-    //     printf("thread %d write: %u\n", tid, *(uint32_t*)(&info.output[i]));
-    // }
-    for (int i=0; i<info.potision; i+=4) {
-        // printf("thread %d write byte %x%x%x%x\n", tid, info.output[i], info.output[i + 1], info.output[i + 2], info.output[i + 3]);
-    }
-}
-#endif
+// #ifdef DEBUG
+// if (should_write && cid == ERR_CHUNK && tid == ERR_THREAD) {
+//     // for (int i=0; i<info.potision; i+=4) {
+//     //     printf("thread %d write: %u\n", tid, *(uint32_t*)(&info.output[i]));
+//     // }
+//     for (int i=0; i<info.potision; i+=4) {
+//         printf("thread %d write byte %x%x%x%x\n", tid, info.output[i], info.output[i + 1], info.output[i + 2], info.output[i + 3]);
+//     }
+// }
+// #endif
 
     }
 

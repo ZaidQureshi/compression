@@ -1,8 +1,8 @@
 #ifndef _RLEV2_UTIL_H_
 #define _RLEV2_UTIL_H_
 
-#define ERR_THREAD 0
-#define ERR_CHUNK 0
+#define ERR_THREAD 26
+#define ERR_CHUNK 3
 
 // #define DEBUG
 constexpr int WRITE_VEC_SIZE = 4;
@@ -140,6 +140,8 @@ inline void initialize_bit_maps() {
     cudaMemcpyToSymbol(device_closest_aligned_bit_map, &__CLOSEST_ALIGNED_FIXED_BIT_MAP, 65 * sizeof(uint8_t));
     cudaMemcpyToSymbol(device_decode_bit_map, &__BIT_WIDTH_DECODE_MAP, 32 * sizeof(uint8_t));
 }
+
+constexpr int SINGLE_WARP_DECODE_BUFFER_COUNT = 128;
 constexpr int DECODE_BUFFER_COUNT = 16;
 constexpr int DECODE_BUFFER4_COUNT = DECODE_BUFFER_COUNT / 4;
 constexpr int SHM_BUFFER_COUNT = DECODE_BUFFER_COUNT * BLK_SIZE;
