@@ -34,8 +34,8 @@ namespace rlev2 {
 
 		std::chrono::high_resolution_clock::time_point kernel_start = std::chrono::high_resolution_clock::now();
 		// decompress_func_write_sync<<<n_chunks, dim3(BLK_SIZE, 2, 1)>>>(d_in, n_chunks, d_blk_off, d_col_len, d_out);
-		// decompress_func_read_sync<READ_UNIT><<<n_chunks, dim3(BLK_SIZE, 2, 1)>>>(d_in, n_chunks, d_blk_off, d_col_len, d_out);
-		decompress_single_warp<READ_UNIT, 32>(d_in, n_chunks, d_blk_off, d_col_len, d_out);
+		decompress_func_read_sync<READ_UNIT><<<n_chunks, dim3(BLK_SIZE, 2, 1)>>>(d_in, n_chunks, d_blk_off, d_col_len, d_out);
+		// decompress_single_warp<READ_UNIT, 32>(d_in, n_chunks, d_blk_off, d_col_len, d_out);
 		// decompress_kernel_single_warp<READ_UNIT><<<n_chunks, BLK_SIZE>>>(d_in, n_chunks, d_blk_off, d_col_len, d_out);
 		cuda_err_chk(cudaDeviceSynchronize());
 		std::chrono::high_resolution_clock::time_point kernel_end = std::chrono::high_resolution_clock::now();

@@ -76,25 +76,20 @@ namespace rlev2 {
 			};
 
 			auto write_int = [&](int64_t i) {
-				out_ptr ++;
-				// *(out_8B + out_buffer_ptr) = i; 
-				// out_buffer_ptr ++;
-				// if (out_buffer_ptr == READ_UNIT) {
-				// 	out_buffer_ptr = 0;
-				// 	out_8B += BLK_SIZE * READ_UNIT;
-				// }
-				
-				if (out_buffer_ptr == WRITE_VEC_SIZE) {
-					deque_int();
+				if (READ_UNIT >= 4) {
+					out_ptr ++;
+					if (out_buffer_ptr == WRITE_VEC_SIZE) {
+						deque_int();
+					}
+					out_buffer[tid][out_buffer_ptr++] = i;
+				} else {
+					*(out_8B + out_buffer_ptr) = i; 
+					out_buffer_ptr ++;
+					if (out_buffer_ptr == READ_UNIT) {
+						out_buffer_ptr = 0;
+						out_8B += BLK_SIZE * READ_UNIT;
+					}
 				}
-
-				out_buffer[tid][out_buffer_ptr++] = i;
-				// out_buffer_ptr = (out_buffer_ptr + 1) % WRITE_VEC_SIZE;
-				// if (out_buffer_ptr == 0) {
-				// 	*reinterpret_cast<longlong4*>(out_8B) = *reinterpret_cast<longlong4*>(out_buffer[tid]);
-				// 	out_8B += BLK_SIZE * READ_UNIT;
-				// }
-				
 			};
 			
 			auto read_byte = [&]() {
