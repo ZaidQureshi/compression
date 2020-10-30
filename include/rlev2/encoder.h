@@ -9,8 +9,8 @@
 namespace rlev2 {
     template<bool skip=false>
     struct encode_info {
-        int64_t deltas[MAX_LITERAL_SIZE];
-        int64_t literals[MAX_LITERAL_SIZE];
+        INPUT_T deltas[MAX_LITERAL_SIZE];
+        INPUT_T literals[MAX_LITERAL_SIZE];
 
         uint32_t num_literals = 0;
         uint32_t fix_runlen = 0, var_runlen = 0;
@@ -30,6 +30,8 @@ namespace rlev2 {
                 output[potision ++] = val;
             // }
         }
+
+        int cid, tid;
     };
 
     typedef struct patch_blob {
@@ -37,20 +39,20 @@ namespace rlev2 {
         uint32_t patch_width;
         uint32_t patch_gap_width;
         uint8_t bits95p, bits100p; //should be reduced values' bits
-        int64_t literal_min; //used for reducing other literals
-        int64_t reduced_literals[MAX_LITERAL_SIZE];
-        int64_t gap_patch_list[MAX_LITERAL_SIZE];
+        INPUT_T literal_min; //used for reducing other literals
+        INPUT_T reduced_literals[MAX_LITERAL_SIZE];
+        INPUT_T gap_patch_list[MAX_LITERAL_SIZE];
     } patch_blob;
 
     // Should guarantee first parameter is the larger one.
     __host__ __device__
-    bool is_safe_subtract(const int64_t& larger, const int64_t& smaller) {
+    bool is_safe_subtract(const INPUT_T& larger, const INPUT_T& smaller) {
         // Original implementation causes overflow already while checking safety.
         if (smaller > 0) return true;
         return (larger > smaller - INT64_MIN);
     }
 
-    __host__ __device__ void block_encode(const uint64_t, int64_t*, const uint64_t, uint8_t*, uint64_t*);
+    __host__ __device__ void block_encode(const uint64_t, INPUT_T*, const uint64_t, uint8_t*, uint64_t*);
     __host__ __device__ void writeDirectValues(encode_info<>&);
     __host__ __device__ void writeDeltaValues(encode_info<>&);
     __host__ __device__ void writeShortRepeatValues(encode_info<>&);
@@ -58,7 +60,7 @@ namespace rlev2 {
 
     // Only need 8 bit (255) to represent 64 bit varint
     __host__ __device__
-    uint8_t find_closes_num_bits(int64_t value) {
+    uint8_t find_closes_num_bits(INPUT_T value) {
         if (value < 0) {
             return get_closest_bit(64);
         }
@@ -71,7 +73,7 @@ namespace rlev2 {
     }
 
     __host__ __device__ 
-    void write_aligned_ints(int64_t* in, uint32_t len, uint8_t bits, encode_info<>& info) {
+    void write_aligned_ints(INPUT_T* in, uint32_t len, uint8_t bits, encode_info<>& info) {
         if (bits < 8 ) {
             // For safetyness, only bits should be written. 
             auto bitMask = static_cast<uint8_t>((1 << bits) - 1);
@@ -110,11 +112,11 @@ namespace rlev2 {
     }
 
     __host__ __device__
-    void write_unaligned_ints(int64_t* in, uint32_t len, uint8_t bits, encode_info<>& info) {
+    void write_unaligned_ints(INPUT_T* in, uint32_t len, uint8_t bits, encode_info<>& info) {
         uint32_t bitsLeft = 8;
         uint8_t current = 0;
         for(uint32_t i=0; i <len; i++) {
-            int64_t value = in[i];
+            INPUT_T value = in[i];
             // printf("pb write val: %ld\n", value);
             uint32_t bitsToWrite = bits;
 
@@ -124,7 +126,7 @@ namespace rlev2 {
                 // subtract out the bits we just added
                 bitsToWrite -= bitsLeft;
                 // zero out the bits above bitsToWrite
-                value &= (static_cast<uint64_t>(1) << bitsToWrite) - 1;
+                value &= (static_cast<UINPUT_T>(1) << bitsToWrite) - 1;
 
                 info.write_value(current);
                 // printf("write byte %x(%u)\n", info.output[info.potision - 1], bits);
@@ -148,7 +150,7 @@ namespace rlev2 {
     }
 
     __host__ __device__
-    void compute_bit_width(int64_t* data, uint32_t len, uint8_t* hist) {
+    void compute_bit_width(INPUT_T* data, uint32_t len, uint8_t* hist) {
         for (int i=0; i<HIST_LEN; ++i) hist[i] = 0;
         for (uint32_t i=0; i<len; ++i) {
             hist[get_encoded_bit_width(find_closes_num_bits(data[i]))] ++;
@@ -172,7 +174,7 @@ namespace rlev2 {
     __host__ __device__
     void preparePatchedBlob1(encode_info<>& info, patch_blob& pb) {
         // mask will be max value beyond which patch will be generated
-        int64_t mask = static_cast<int64_t>(static_cast<uint64_t>(1) << pb.bits95p) - 1;
+        INPUT_T mask = static_cast<INPUT_T>(static_cast<UINPUT_T>(1) << pb.bits95p) - 1;
         // printf("<<<<<<<<<<<<<=== pb95p %u\n", pb.bits95p);
         pb.patch_len = ceil(info.num_literals, static_cast<uint32_t>(20));
         pb.patch_width = get_closest_bit(pb.bits100p - pb.bits95p);
@@ -181,7 +183,7 @@ namespace rlev2 {
         if (pb.patch_width == 64) {
             pb.patch_width = 56;
             pb.bits95p = 8;
-            mask = static_cast<int64_t>(static_cast<uint64_t>(1) << pb.bits95p) - 1;
+            mask = static_cast<INPUT_T>(static_cast<UINPUT_T>(1) << pb.bits95p) - 1;
         }
 
         uint32_t gapIdx = 0;
@@ -189,7 +191,7 @@ namespace rlev2 {
         size_t prev = 0;
         size_t maxGap = 0;
 
-        int64_t gapList[MAX_LITERAL_SIZE], patchList[MAX_LITERAL_SIZE];
+        INPUT_T gapList[MAX_LITERAL_SIZE], patchList[MAX_LITERAL_SIZE];
 
         for(size_t i = 0; i < info.num_literals; i++) {
             // if value is above mask then create the patch and record the gap
@@ -204,7 +206,7 @@ namespace rlev2 {
                 gapList[gapIdx ++] = gap;
 
                 // extract the most significant bits that are over mask bits
-                int64_t patch = pb.reduced_literals[i] >> pb.bits95p;
+                INPUT_T patch = pb.reduced_literals[i] >> pb.bits95p;
                 patchList[patchIdx ++] = patch;
 
                 // strip off the MSB to enable safe bit packing
@@ -222,7 +224,7 @@ namespace rlev2 {
         if (maxGap == 0 && pb.patch_len != 0) {
             pb.patch_gap_width = 1;
         } else {
-            pb.patch_gap_width = find_closes_num_bits(static_cast<int64_t>(maxGap));
+            pb.patch_gap_width = find_closes_num_bits(static_cast<INPUT_T>(maxGap));
         }
 
         if (pb.patch_gap_width > 8) {
@@ -241,8 +243,8 @@ namespace rlev2 {
 
         uint32_t gap_list_pos = 0;
         for(size_t i = 0; i < pb.patch_len; i++) {
-            int64_t g = gapList[gapIdx++];
-            int64_t p = patchList[patchIdx++];
+            INPUT_T g = gapList[gapIdx++];
+            INPUT_T p = patchList[patchIdx++];
             while (g > 255) {
                 pb.gap_patch_list[gap_list_pos ++] = (255L << pb.patch_width);
                 i++;
@@ -257,7 +259,7 @@ namespace rlev2 {
     __host__ __device__
     void determineEncoding(encode_info<>& info) {
         // printf("determine encoding\n");
-        int64_t* literals = info.literals;
+        INPUT_T* literals = info.literals;
         if (info.num_literals <= MINIMUM_REPEAT) {
             writeDirectValues(info);
             return;
@@ -268,15 +270,15 @@ namespace rlev2 {
         bool isDecreasing = true;
         info.is_fixed_delta = true;
 
-        int64_t literal_min = literals[0], literal_max = literals[0];
-        int64_t initialDelta = literals[1] - literals[0];
-        int64_t currDelta = 0;
-        int64_t max_delta = 0;
+        INPUT_T literal_min = literals[0], literal_max = literals[0];
+        INPUT_T initialDelta = literals[1] - literals[0];
+        INPUT_T currDelta = 0;
+        INPUT_T max_delta = 0;
 
-        int64_t* deltas = info.deltas;
+        INPUT_T* deltas = info.deltas;
         for (size_t i = 1; i < info.num_literals; i++) {
-            const int64_t l1 = literals[i];
-            const int64_t l0 = literals[i - 1];
+            const INPUT_T l1 = literals[i];
+            const INPUT_T l0 = literals[i - 1];
             currDelta = l1 - l0;
             literal_min = min(literal_min, l1);
             literal_max = max(literal_max, l1);
@@ -365,7 +367,7 @@ namespace rlev2 {
     __host__ __device__
     void writeShortRepeatValues(encode_info<>& info) {
         // printf("write short repeat\n");
-        int64_t	val = info.literals[0];
+        INPUT_T	val = info.literals[0];
 
         const uint8_t val_bits = find_closes_num_bits(val);
         const uint8_t val_bytes = (val_bits - 1) / 8 + 1;
@@ -381,6 +383,7 @@ namespace rlev2 {
 
         info.fix_runlen = 0;
         info.num_literals = 0;
+        info.var_runlen = 0;
     }
 
     __host__ __device__
@@ -413,21 +416,22 @@ namespace rlev2 {
     }
 
     __host__ __device__ 
-    void writeVulong(int64_t val, encode_info<>& info) {
+    void writeVulong(INPUT_T val, encode_info<>& info) {
         while (true) {
         if ((val & ~0x7f) == 0) {
             info.write_value(static_cast<char>(val));
             return;
         } else {
             info.write_value(static_cast<char>(0x80 | (val & 0x7f)));
-            val = (static_cast<uint64_t>(val) >> 7);
+            val = (static_cast<UINPUT_T>(val) >> 7);
+            // val = (val >> 7);
         }
         }
     }
 
     __host__ __device__
-    void writeVslong(int64_t val, encode_info<>& info) {
-        writeVulong((val << 1) ^ (val >> 63), info);
+    void writeVslong(INPUT_T val, encode_info<>& info) {
+        writeVulong((val << 1) ^ (val >> (sizeof(INPUT_T) * 8 - 1)), info);
     }
 
     __host__ __device__ 
@@ -471,6 +475,9 @@ namespace rlev2 {
         writeVulong(info.literals[0], info);
 
         writeVslong(info.deltas[0], info);
+// #ifdef DEBUG
+//         if (info.cid==ERR_CHUNK && info.tid==ERR_THREAD)printf("thread %d write initial delta %ld\n", info.tid, info.deltas[0]);
+// #endif
         if (!info.is_fixed_delta) {
             write_aligned_ints(info.deltas + 1, info.num_literals - 2, num_bits, info);
         }
@@ -479,6 +486,8 @@ namespace rlev2 {
             info.deltas[i] = 0;
         }
         info.num_literals = 0;
+        // info.fix_runlen = 0;
+        info.var_runlen = 0;
     }
     
     __host__ __device__ 
@@ -540,31 +549,31 @@ namespace rlev2 {
         info.num_literals = 0;
     }
 
-    __global__ void kernel_encode(int64_t* in, const uint64_t in_n_bytes, const uint32_t n_chunks, uint8_t* out, uint64_t *offset) {
+    __global__ void kernel_encode(INPUT_T* in, const uint64_t in_n_bytes, const uint32_t n_chunks, uint8_t* out, uint64_t *offset) {
         uint64_t tid = blockDim.x * blockIdx.x + threadIdx.x;
         if (tid < n_chunks) {
             block_encode(tid, in, in_n_bytes, out, &offset[tid + 1]);
         }
     }
 
-    __host__ __device__ void block_encode(const uint64_t tid, int64_t* in, const uint64_t in_n_bytes, uint8_t* out, uint64_t* offset) {
+    __host__ __device__ void block_encode(const uint64_t tid, INPUT_T* in, const uint64_t in_n_bytes, uint8_t* out, uint64_t* offset) {
         encode_info<> info;
         info.output = out + tid * OUTPUT_CHUNK_SIZE;
 
-        int64_t prev_delta;
+        INPUT_T prev_delta;
 
         auto& num_literals = info.num_literals;
         auto& fix_runlen = info.fix_runlen;
         auto& var_runlen = info.var_runlen;
-        int64_t *literals = info.literals;
+        INPUT_T *literals = info.literals;
 
-        const uint64_t start = tid * CHUNK_SIZE / sizeof(int64_t);
-        const uint64_t end = min((tid + 1) * CHUNK_SIZE, in_n_bytes) / sizeof(int64_t);
+        const uint64_t start = tid * CHUNK_SIZE / sizeof(INPUT_T);
+        const uint64_t end = min((tid + 1) * CHUNK_SIZE, in_n_bytes) / sizeof(INPUT_T);
 
         auto mychunk_size = end - start;
         // printf("%lu: (%lu, %lu)\n", tid, start, end);
 
-        in += tid * CHUNK_SIZE / sizeof(int64_t);
+        in += tid * CHUNK_SIZE / sizeof(INPUT_T);
 
         while (mychunk_size-- > 0) {
             auto val = *(in ++);
@@ -589,7 +598,7 @@ namespace rlev2 {
                 continue;
             }
 
-            int64_t curr_delta = val - literals[num_literals - 1];
+            INPUT_T curr_delta = val - literals[num_literals - 1];
             if (prev_delta == 0 && curr_delta == 0) {
                 // fixed run length
                 literals[num_literals ++] = val;
@@ -697,11 +706,11 @@ namespace rlev2 {
         if (tid < n_chunks) shift_data(in, out, ptr, tid);
     }
 
-    __host__ void compress_gpu(const int64_t* in, const uint64_t in_n_bytes, uint8_t*& out, uint64_t& out_n_bytes) {
+    __host__ void compress_gpu(const INPUT_T* in, const uint64_t in_n_bytes, uint8_t*& out, uint64_t& out_n_bytes) {
         initialize_bit_maps();
         
         uint32_t n_chunks = (in_n_bytes - 1) / CHUNK_SIZE + 1;
-        int64_t* d_in;
+        INPUT_T* d_in;
         uint8_t *d_out, *d_shift;
         cuda_err_chk(cudaMalloc((void**)&d_in, in_n_bytes));
         cuda_err_chk(cudaMalloc((void**)&d_out, n_chunks * OUTPUT_CHUNK_SIZE));

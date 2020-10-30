@@ -10,12 +10,12 @@ namespace rlev2 {
 	template<int READ_UNIT>
 	__host__ void decompress_gpu(const uint8_t *in, const uint64_t in_n_bytes, const uint64_t n_chunks,
 			blk_off_t *blk_off, col_len_t *col_len,
-			int64_t *&out, uint64_t &out_n_bytes) {
+			INPUT_T *&out, uint64_t &out_n_bytes) {
 		printf("Calling decompress kernel.\n");
 
 		initialize_bit_maps();
 		uint8_t *d_in;
-		int64_t *d_out;
+		INPUT_T *d_out;
 		blk_off_t *d_blk_off;
 		col_len_t *d_col_len;
 
@@ -43,7 +43,7 @@ namespace rlev2 {
 
 		std::cout << "kernel time: " << total.count() << " secs\n";
 	
-		out = new int64_t[exp_out_n_bytes / sizeof(int64_t)];
+		out = new INPUT_T[exp_out_n_bytes / sizeof(INPUT_T)];
 		cuda_err_chk(cudaMemcpy(out, d_out, exp_out_n_bytes, cudaMemcpyDeviceToHost));
 		
 		cuda_err_chk(cudaFree(d_in));

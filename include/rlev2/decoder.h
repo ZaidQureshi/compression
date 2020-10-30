@@ -9,7 +9,7 @@
 
 namespace rlev2 {
 
-    __host__ __device__ inline void write_val(const int64_t val, int64_t* &out) {
+    __host__ __device__ inline void write_val(const INPUT_T val, INPUT_T* &out) {
         *(out ++) = val;
     }
 
@@ -17,15 +17,15 @@ namespace rlev2 {
         return *(in ++);
     }
 
-    __host__ __device__ int64_t read_long(uint8_t* &in, uint8_t num_bytes) {
-        int64_t ret = 0;
+    __host__ __device__ INPUT_T read_long(uint8_t* &in, uint8_t num_bytes) {
+        INPUT_T ret = 0;
         while (num_bytes-- > 0) {
-            ret |= ((int64_t)read_byte(in) << (num_bytes * 8));
+            ret |= ((INPUT_T)read_byte(in) << (num_bytes * 8));
         }
         return ret;
     }
 
-    __host__ __device__ uint32_t decode_short_repeat(uint8_t* &in, uint8_t first, int64_t* &out) {
+    __host__ __device__ uint32_t decode_short_repeat(uint8_t* &in, uint8_t first, INPUT_T* &out) {
         const uint8_t num_bytes = ((first >> 3) & 0x07) + 1;
         const uint8_t count = (first & 0x07) + MINIMUM_REPEAT;
 
@@ -38,7 +38,7 @@ namespace rlev2 {
         return num_bytes;
     }
 
-    __host__ __device__ uint32_t readLongs(uint8_t*& in, int64_t*& data, uint64_t len, uint8_t fb) {
+    __host__ __device__ uint32_t readLongs(uint8_t*& in, INPUT_T*& data, uint64_t len, uint8_t fb) {
         uint32_t ret = 0;
 
         uint64_t bitsLeft = 0;
@@ -71,8 +71,9 @@ namespace rlev2 {
         return ret;
     }
 
-    __host__ __device__ uint64_t readVulong(uint8_t*& in) {
-        uint64_t ret = 0, b;
+    __host__ __device__ UINPUT_T readVulong(uint8_t*& in) {
+        UINPUT_T ret = 0;
+        uint8_t b;
         uint64_t offset = 0;
         do {
             b = read_byte(in);
@@ -82,22 +83,22 @@ namespace rlev2 {
         return ret;
     }
 
-    __host__ __device__ inline int64_t unZigZag(uint64_t value) {
+    __host__ __device__ inline INPUT_T unZigZag(UINPUT_T value) {
         return value >> 1 ^ -(value & 1);
     }
-    __host__ __device__ inline int64_t readVslong(uint8_t*& in) {
+    __host__ __device__ inline INPUT_T readVslong(uint8_t*& in) {
         return unZigZag(readVulong(in));
     }
 
 
-    __host__ __device__ uint32_t decode_delta(uint8_t* &in, uint8_t first, int64_t* &out) {
+    __host__ __device__ uint32_t decode_delta(uint8_t* &in, uint8_t first, INPUT_T* &out) {
         uint8_t *in_begin = in;
         const uint8_t encoded_fbw = (first >> 1) & 0x1f;
         const uint8_t fbw = get_decoded_bit_width(encoded_fbw);
         const uint16_t len = ((static_cast<uint16_t>(first & 0x01) << 8) | read_byte(in)) + 1;
 
-        auto base_val = static_cast<int64_t>(readVulong(in));
-        auto base_delta = static_cast<int64_t>(readVslong(in));
+        auto base_val = static_cast<INPUT_T>(readVulong(in));
+        auto base_delta = static_cast<INPUT_T>(readVslong(in));
 
         // printf("base val: %ld\n", base_val);
         // printf("base_deltal: %ld\n", base_delta);
@@ -132,7 +133,7 @@ namespace rlev2 {
         return in - in_begin;
     }
 
-    __host__ __device__ uint32_t decode_direct(uint8_t* &in, uint8_t first, int64_t* &out) {
+    __host__ __device__ uint32_t decode_direct(uint8_t* &in, uint8_t first, INPUT_T* &out) {
         // printf("Decode DIRECT\n");
         const uint8_t encoded_fbw = (first >> 1) & 0x1f;
         const uint8_t fbw = get_decoded_bit_width(encoded_fbw);
@@ -141,7 +142,7 @@ namespace rlev2 {
         return 1 + readLongs(in, out, len, fbw);
     }
 
-    __host__ __device__ uint32_t decode_patched_base(uint8_t* &in, uint8_t first, int64_t* &out) {
+    __host__ __device__ uint32_t decode_patched_base(uint8_t* &in, uint8_t first, INPUT_T* &out) {
         uint8_t *in_begin = in;
 
         // printf("Decode PATCHED BASE =>>>>>>>>>>>>>>>>>>>>>.\n\n");
@@ -168,14 +169,14 @@ namespace rlev2 {
         uint32_t cfb = get_closest_bit(pw + pgw);
 
         // TODO Patched List should be no more than 10 percent of MAX_LIT_SIZE
-        int64_t patch_list[MAX_LITERAL_SIZE], *p_list = patch_list;
+        INPUT_T patch_list[MAX_LITERAL_SIZE], *p_list = patch_list;
         consumed += readLongs(in, p_list, pll, cfb);
 
         const uint16_t patch_mask = (static_cast<uint16_t>(1) << pw) - 1; // get rid of patch gap
         int gap_idx = 0;
         for (uint8_t p=0; p<pll; ++p) {
             gap_idx += patch_list[p] >> pw;
-            curr[gap_idx] |= static_cast<int64_t>(patch_list[p] & patch_mask) << fbw;
+            curr[gap_idx] |= static_cast<INPUT_T>(patch_list[p] & patch_mask) << fbw;
 
             // printf("curr[gap_idx]: %ld\n", curr[gap_idx]);
         }
@@ -187,10 +188,10 @@ namespace rlev2 {
         return in - in_begin;
     }
 
-    __host__ __device__ void block_decode(const uint64_t tid, uint8_t* in, const uint64_t* offsets, int64_t* out) {
+    __host__ __device__ void block_decode(const uint64_t tid, uint8_t* in, const uint64_t* offsets, INPUT_T* out) {
         uint32_t consumed = 0;
 
-        auto curr_out = (int64_t*)((uint8_t*)out + tid * CHUNK_SIZE);
+        auto curr_out = (INPUT_T*)((uint8_t*)out + tid * CHUNK_SIZE);
 
         // printf("tid with write offset %ld\n", curr_out - out);
 
@@ -221,17 +222,17 @@ namespace rlev2 {
         }
     }
 
-    __global__ void kernel_decompress(uint8_t* in, const uint64_t *ptr, const uint32_t n_chunks, int64_t* out) {
+    __global__ void kernel_decompress(uint8_t* in, const uint64_t *ptr, const uint32_t n_chunks, INPUT_T* out) {
         uint64_t tid = blockDim.x * blockIdx.x + threadIdx.x;
         if (tid < n_chunks) block_decode(tid, in, ptr, out);
     }
 
-    __host__ void decompress_gpu(const uint8_t* in, const uint64_t in_n_bytes, int64_t*& out, uint64_t& out_n_bytes) {
+    __host__ void decompress_gpu(const uint8_t* in, const uint64_t in_n_bytes, INPUT_T*& out, uint64_t& out_n_bytes) {
 	cudaProfilerStart();    
 	    initialize_bit_maps();
         
         uint8_t *d_in;
-        int64_t *d_out;
+        INPUT_T *d_out;
         uint64_t *d_ptr;
         
         uint32_t n_ptr = *((uint32_t*)in);
@@ -257,7 +258,7 @@ namespace rlev2 {
 		std::chrono::duration<double> total = std::chrono::duration_cast<std::chrono::duration<double>>(kernel_end - kernel_start);		
 		std::cout << "kernel time: " << total.count() << " secs\n";
 
-        out = new int64_t[raw_data_bytes / sizeof(int64_t)];
+        out = new INPUT_T[raw_data_bytes / sizeof(INPUT_T)];
 	    cuda_err_chk(cudaMemcpy(out, d_out, raw_data_bytes, cudaMemcpyDeviceToHost));
 
         cuda_err_chk(cudaFree(d_in));

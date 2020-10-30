@@ -6,13 +6,14 @@
 
 namespace rlev2 {
     template<bool should_write, int READ_UNIT>
-    __global__ void block_encode(int64_t* in, const uint64_t in_n_bytes, 
+    __global__ void block_encode(INPUT_T* in, const uint64_t in_n_bytes, 
             uint8_t* out, col_len_t* acc_col_len, blk_off_t* blk_off) {
 
 __shared__ unsigned long long int blk_len;
 
         uint32_t tid = threadIdx.x;
         uint32_t cid = blockIdx.x;
+
 
 if (!should_write) {
     if (tid == 0) {
@@ -23,14 +24,15 @@ if (!should_write) {
     }
     __syncthreads();
 }
-        int64_t in_start_limit = min((cid + 1) * CHUNK_SIZE, in_n_bytes) / sizeof(int64_t);
-        int64_t in_start = cid * CHUNK_SIZE / sizeof(int64_t) + tid * READ_UNIT;
+        uint64_t in_start_limit = min((cid + 1) * CHUNK_SIZE, in_n_bytes) / sizeof(INPUT_T);
+        uint64_t in_start = cid * CHUNK_SIZE / sizeof(INPUT_T) + tid * READ_UNIT;
 
         //TODO: Make this more intelligent
         // uint8_t* out_4B = blk_off[cid] - blk_off[0] + WRITE_UNIT * tid;
 
 
         encode_info<> info;
+        info.tid = tid; info.cid = cid;
         
 if (!should_write) {
     info.output = out + 32 * tid;
@@ -40,18 +42,21 @@ if (!should_write) {
 }
         
 
-        int64_t prev_delta;
+        INPUT_T prev_delta;
 
         auto& num_literals = info.num_literals;
         auto& fix_runlen = info.fix_runlen;
         auto& var_runlen = info.var_runlen;
-        int64_t *literals = info.literals;
+        INPUT_T *literals = info.literals;
 
         int curr_read_offset = 0;
         // printf("thread %d with chunksize %ld\n", tid, mychunk_size);
         while (true) {
             if (in_start + curr_read_offset >= in_start_limit) break;
             auto val = in[in_start + curr_read_offset]; curr_read_offset ++;
+#ifdef DEBUG
+if (should_write  && cid == ERR_CHUNK && tid == ERR_THREAD) printf("thread %u read %u\n", tid, val);
+#endif
             if (curr_read_offset == READ_UNIT) {
                 in_start += BLK_SIZE * READ_UNIT;
                 curr_read_offset = 0;
@@ -75,7 +80,7 @@ if (!should_write) {
                 continue;
             }
 
-            int64_t curr_delta = val - literals[num_literals - 1];
+            INPUT_T curr_delta = val - literals[num_literals - 1];
             if (prev_delta == 0 && curr_delta == 0) {
                 // fixed run length
                 literals[num_literals ++] = val;
@@ -90,9 +95,11 @@ if (!should_write) {
                     var_runlen -= (MINIMUM_REPEAT - 1);
 
                     determineEncoding(info);
-
+                    
+                    prev_delta = 0; 
                     for (uint32_t ii = 0; ii < MINIMUM_REPEAT; ++ii) {
                         literals[ii] = val;
+                        info.deltas[ii] = 0;
                     }
                     num_literals = MINIMUM_REPEAT;
                 }
@@ -184,15 +191,6 @@ if (!should_write) {
     void tranpose_col_len_single(uint8_t* in, col_len_t *acc_col_len, col_len_t *col_len, blk_off_t *blk_off, uint8_t* out) {
         uint32_t cid = blockIdx.x;
 
-        // uint64_t in_idx = (cid + tid == 0) ? 0 : acc_col_len[cid * BLK_SIZE + tid - 1];
-        // uint64_t out_idx = blk_off[cid] + tid * DECODE_UNIT;
-        // int64_t out_bytes = acc_col_len[cid * BLK_SIZE + tid] - ((cid + tid == 0) ? 0 : acc_col_len[cid * BLK_SIZE + tid - 1]);
-
-        // uint32_t* in_4B = (uint32_t *)(&(in[in_idx]));
-        // uint32_t in_4B_idx = in_idx;
-        // uint32_t* out_4B = (uint32_t *)(&(out[blk_off[cid]]));
-        // uint32_t out_4B_idx = 0;
-        // int iter = 0;
 
         col_len_t loc_col_len[32];
         memcpy(loc_col_len, col_len + cid * BLK_SIZE, 32 * sizeof(col_len_t));
@@ -209,11 +207,6 @@ if (!should_write) {
                     for (int i=0; i<DECODE_UNIT; ++i) {
                         out[out_idx + i] = in[tidx + i];
                     }
-        // if (cid == 0 && tid == ERR_THREAD) 
-        // printf("thread %d out4b at %lu: %x%x%x%x\n", tid, out_idx, out[out_idx], 
-        // out[out_idx+1], 
-        // out[out_idx+2], 
-        // out[out_idx + 3]);
 
                     out_idx += DECODE_UNIT;
                     res ++;
@@ -224,58 +217,15 @@ if (!should_write) {
         }
     }
 
-
-    __global__ 
-    void post_data_tranpose(uint8_t*in, col_len_t *col_len, blk_off_t *blk_off, uint8_t* out) {
-        auto cid = blockIdx.x;
-        auto tid = threadIdx.x;
-        uint64_t out_offset = blk_off[cid];
-        col_len_t out_limit = col_len[cid * BLK_SIZE + tid], out_byte = 0;
-        in += cid * OUTPUT_CHUNK_SIZE + tid * OUTPUT_CHUNK_SIZE / BLK_SIZE;
-
-		const uint32_t t_write_mask = (0xffffffff << (32 - tid));
-        while (true) {
-            auto mask = __activemask();
-            bool read = out_byte < out_limit;
-            if (!read) break;
-
-            auto read_sync = __ballot_sync(mask, read);
-
-            auto active = __popc(read_sync);
-            // printf("thread %d active mask at iter %d: %d\n", (int)tid, (int)(out_byte / 4), active);
-
-            auto left_active = __popc(read_sync & t_write_mask);
-            // printf("thread %d active read at iter %d: %d\n", (int)tid, (int)(out_byte / 4), left_active);
-
-            for (int i=0; i<DECODE_UNIT; ++i) {
-                out[out_offset + left_active * DECODE_UNIT + i] = in[out_byte ++];
-            }
-
-// #ifdef DEBUG
-// if (cid == ERR_CHUNK && tid == ERR_THREAD) {
-//     printf("chunk %d thread %d out4b at %ld with %x%x%x%x\n", cid, tid, 
-//     out_offset + left_active * DECODE_UNIT,
-//     out[out_offset + left_active * DECODE_UNIT ],
-//     out[out_offset + left_active * DECODE_UNIT + 1],
-//     out[out_offset + left_active * DECODE_UNIT + 2],
-//     out[out_offset + left_active * DECODE_UNIT + 3]);
-// }
-// #endif
-            
-            out_offset += DECODE_UNIT * active;
-            __syncwarp(mask);
-        }
-    }
-
     template <int READ_UNIT>
     __host__
-    void compress_gpu_transpose(const int64_t* const in, const uint64_t in_n_bytes, uint8_t*& out, uint64_t& out_n_bytes,
+    void compress_gpu_transpose(const INPUT_T* const in, const uint64_t in_n_bytes, uint8_t*& out, uint64_t& out_n_bytes,
                     uint64_t& out_n_chunks, blk_off_t *&blk_off, col_len_t *&col_len) {
         printf("Calling compress kernel.\n");
         uint32_t n_chunks = (in_n_bytes - 1) / CHUNK_SIZE + 1;
         out_n_chunks = n_chunks;
         
-        int64_t *d_in;
+        INPUT_T *d_in;
         uint8_t *d_out, *d_out_transpose;
         col_len_t *d_col_len, *d_acc_col_len; //accumulated col len 
         blk_off_t *d_blk_off;
@@ -324,6 +274,8 @@ if (!should_write) {
         out = new uint8_t[out_n_bytes];
         blk_off[n_chunks] = in_n_bytes; //use last index of blk_off to store file size.
         
+        printf("out n bytes encoding: %lu\n", out_n_bytes);
+
         cuda_err_chk(cudaMalloc(&d_out_transpose, out_n_bytes));
         tranpose_col_len_single<<<n_chunks, 1>>>(d_out, d_acc_col_len, d_col_len, d_blk_off, d_out_transpose);
         // post_data_tranpose<<<n_chunks, BLK_SIZE>>>(d_out, d_col_len, d_blk_off, d_out_transpose);

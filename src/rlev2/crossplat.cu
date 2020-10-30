@@ -47,7 +47,7 @@ int main(int argc, char** argv) {
     uint64_t n_chunks;
 
         
-    int64_t* in = (int64_t*)buffer;
+    INPUT_T* in = (INPUT_T*)buffer;
 
     uint8_t *t_out;
     auto encode_start = std::chrono::high_resolution_clock::now();
@@ -56,7 +56,7 @@ int main(int argc, char** argv) {
     rlev2::compress_gpu_transpose<READ_GRANULARITY>(in, lSize, encoded, encoded_bytes, n_chunks, blk_off, col_len);
     auto encode_end = std::chrono::high_resolution_clock::now();
 
-    int64_t* decoded = nullptr;
+    INPUT_T* decoded = nullptr;
     uint64_t decoded_bytes = 0;
 
     auto decode_start = std::chrono::high_resolution_clock::now();
@@ -79,14 +79,14 @@ int main(int argc, char** argv) {
 
     printf("input size: %ld\n", lSize);   
     assert(decoded_bytes == lSize);
-    printf("input ints: %ld\n", decoded_bytes / sizeof(int64_t));   
+    printf("input ints: %ld\n", decoded_bytes / sizeof(INPUT_T));   
 
-    for (int i = 0; i < decoded_bytes / sizeof(int64_t); ++i) {
+    for (int i = 0; i < decoded_bytes / sizeof(INPUT_T); ++i) {
         // printf("compare at %d %lld(%lld)\n", i, in[i], decoded[i]);
         if (decoded[i] != in[i]) {
             // printf("fail at %d %lld(%lld)\n", i, in[i], decoded[i]);
 
-            for (int k=i; k<i+32; ++k) {
+            for (int k=i; k<i+128; k+=32) {
             printf("fail at %d %lld(%lld)\n", k, in[k], decoded[k]);
 
             }
