@@ -34,12 +34,17 @@ if (!should_write) {
         encode_info<> info;
         info.tid = tid; info.cid = cid;
         
-if (!should_write) {
-    info.output = out + 32 * tid;
-} else {
+// if (!should_write) {
+//     info.output = out + 32 * tid;
+// } else {
     uint32_t write_off =  (cid + tid == 0) ? 0 : acc_col_len[cid * BLK_SIZE + tid - 1];
     info.output = out + write_off;
-}
+
+// #ifdef DEBUG
+if (should_write  && cid == ERR_CHUNK && tid == ERR_THREAD) 
+printf("chunk %d thread %d without offset %u\n", cid, tid, write_off);
+// #endif
+// }
         
 
         INPUT_T prev_delta;
@@ -174,16 +179,13 @@ if (!should_write) {
     }
 }
 
-#ifdef DEBUG
-if (should_write && cid == ERR_CHUNK && tid == ERR_THREAD) {
-    // for (int i=0; i<info.potision; i+=4) {
-    //     printf("thread %d write: %u\n", tid, *(uint32_t*)(&info.output[i]));
-    // }
-    for (int i=0; i<info.potision; i+=4) {
-        printf("thread %d write byte %x%x%x%x\n", tid, info.output[i], info.output[i + 1], info.output[i + 2], info.output[i + 3]);
-    }
-}
-#endif
+// #ifdef DEBUG
+// if (should_write && cid == ERR_CHUNK && tid == ERR_THREAD) {
+//     for (int i=0; i<info.potision; i+=4) {
+//         printf("thread %d write byte %x%x%x%x\n", tid, info.output[i], info.output[i + 1], info.output[i + 2], info.output[i + 3]);
+//     }
+// }
+// #endif
 
     }
 
@@ -192,12 +194,20 @@ if (should_write && cid == ERR_CHUNK && tid == ERR_THREAD) {
         uint32_t cid = blockIdx.x;
 
 
+// if (cid == ERR_CHUNK) {
+// for (int i=498475; i<498475+16; i+=4) {
+// printf("out4B pre: %x%x%x%x\n", in[i+0],  
+// in[i+1],  in[i+2], in[i+3]);
+// }
+// }
+
         col_len_t loc_col_len[32];
         memcpy(loc_col_len, col_len + cid * BLK_SIZE, 32 * sizeof(col_len_t));
 
         // More space should be saved. TODO: 
         uint64_t curr_iter_off = 0;
         uint64_t out_idx = blk_off[cid];
+
         while (true) {
             int res = 0;
             for (int tid=0; tid<32; ++tid) {
@@ -215,6 +225,15 @@ if (should_write && cid == ERR_CHUNK && tid == ERR_THREAD) {
             if (res == 0) break;
             curr_iter_off += DECODE_UNIT;
         }
+
+// if (cid == ERR_CHUNK) {
+// uint64_t of = blk_off[cid] + ERR_THREAD*4;
+// for (int i=0; i<4; ++i) {
+// printf("out4B pre: %x%x%x%x\n", out[of+0],  
+// out[of+1],  out[of+2], out[of+3]);
+// of += 128;
+// }
+// }
     }
 
     template <int READ_UNIT>
@@ -274,7 +293,7 @@ if (should_write && cid == ERR_CHUNK && tid == ERR_THREAD) {
         out = new uint8_t[out_n_bytes];
         blk_off[n_chunks] = in_n_bytes; //use last index of blk_off to store file size.
         
-        printf("out n bytes encoding: %lu\n", out_n_bytes);
+        // printf("out n bytes encoding: %lu\n", out_n_bytes);
 
         cuda_err_chk(cudaMalloc(&d_out_transpose, out_n_bytes));
         tranpose_col_len_single<<<n_chunks, 1>>>(d_out, d_acc_col_len, d_col_len, d_blk_off, d_out_transpose);

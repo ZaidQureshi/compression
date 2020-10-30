@@ -29,14 +29,14 @@ namespace rlev2 {
 			uint64_t in_start_idx = blk_off[cid];
 			uint32_t* in_4B = (uint32_t *)(&(in[in_start_idx])) + ERR_THREAD;
 			uint32_t in_4B_off = 0;	
-if (cid == ERR_CHUNK && tid == ERR_THREAD) {
-int of = 0;
-for (int i=0; i<4; ++i) {
-	printf("in4B pre: %x%x%x%x\n", ((uint8_t*)in_4B)[of+0],  
-	((uint8_t*)in_4B)[of+1],  ((uint8_t*)in_4B)[of+2], ((uint8_t*)in_4B)[of+3]);
-	of += 128;
-}
-}
+// if (cid == ERR_CHUNK && tid == ERR_THREAD) {
+// int of = 0;
+// for (int i=0; i<4; ++i) {
+// 	printf("in4B pre: %x%x%x%x\n", ((uint8_t*)in_4B)[of+0],  
+// 	((uint8_t*)in_4B)[of+1],  ((uint8_t*)in_4B)[of+2], ((uint8_t*)in_4B)[of+3]);
+// 	of += 128;
+// }
+// }
 
 			in_4B -= ERR_THREAD;
 			uint8_t in_tail_ = 0;
@@ -56,13 +56,13 @@ for (int i=0; i<4; ++i) {
 
 					*(uint32_t*)(&in_[tid][in_tail_]) = in_4B[in_4B_off + __popc(read_sync & t_read_mask)];  
 					in_cnt_[tid].fetch_add(4, cuda::memory_order_release);
-if (cid == ERR_CHUNK && tid == ERR_THREAD) {
-	printf("in4B off[%u]: %x%x%x%x\n", in_4B_off,
-	in_[tid][in_tail_],
-	in_[tid][in_tail_ + 1], 
-	in_[tid][in_tail_ + 2], 
-	in_[tid][in_tail_ + 3]);
-}
+// if (cid == ERR_CHUNK && tid == ERR_THREAD) {
+// 	printf("in4B off[%u]: %x%x%x%x\n", in_4B_off,
+// 	in_[tid][in_tail_],
+// 	in_[tid][in_tail_ + 1], 
+// 	in_[tid][in_tail_ + 2], 
+// 	in_[tid][in_tail_ + 3]);
+// }
 					in_tail_ = (in_tail_ + 4) % DECODE_BUFFER_COUNT;
 					in_4B_off += __popc(read_sync);
 					used_bytes += 4;

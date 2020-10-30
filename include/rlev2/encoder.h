@@ -9,13 +9,15 @@
 namespace rlev2 {
     template<bool skip=false>
     struct encode_info {
+ uint8_t *output;
+
         INPUT_T deltas[MAX_LITERAL_SIZE];
         INPUT_T literals[MAX_LITERAL_SIZE];
 
         uint32_t num_literals = 0;
         uint32_t fix_runlen = 0, var_runlen = 0;
         
-        uint8_t *output;
+       
         uint32_t potision = 0;
 
         uint8_t delta_bits; // is set when delta encoding is used
@@ -24,6 +26,11 @@ namespace rlev2 {
 
         __host__ __device__
         inline void write_value(uint8_t val) {
+// #ifdef DEBUG
+// if (cid == ERR_CHUNK && tid == ERR_THREAD) {
+//     printf("chunk %d thread %d write %x\n", cid, tid, val);
+// }
+// #endif
             // if (skip) {
             //     potision ++; 
             // } else {
