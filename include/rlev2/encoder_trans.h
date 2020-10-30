@@ -55,7 +55,7 @@ if (!should_write) {
             if (in_start + curr_read_offset >= in_start_limit) break;
             auto val = in[in_start + curr_read_offset]; curr_read_offset ++;
 #ifdef DEBUG
-if (should_write  && cid == ERR_CHUNK && tid == ERR_THREAD) printf("thread %u read %u\n", tid, val);
+// if (should_write  && cid == ERR_CHUNK && tid == ERR_THREAD) printf("thread %u read %u\n", tid, val);
 #endif
             if (curr_read_offset == READ_UNIT) {
                 in_start += BLK_SIZE * READ_UNIT;
@@ -174,16 +174,16 @@ if (!should_write) {
     }
 }
 
-// #ifdef DEBUG
-// if (should_write && cid == ERR_CHUNK && tid == ERR_THREAD) {
-//     // for (int i=0; i<info.potision; i+=4) {
-//     //     printf("thread %d write: %u\n", tid, *(uint32_t*)(&info.output[i]));
-//     // }
-//     for (int i=0; i<info.potision; i+=4) {
-//         printf("thread %d write byte %x%x%x%x\n", tid, info.output[i], info.output[i + 1], info.output[i + 2], info.output[i + 3]);
-//     }
-// }
-// #endif
+#ifdef DEBUG
+if (should_write && cid == ERR_CHUNK && tid == ERR_THREAD) {
+    // for (int i=0; i<info.potision; i+=4) {
+    //     printf("thread %d write: %u\n", tid, *(uint32_t*)(&info.output[i]));
+    // }
+    for (int i=0; i<info.potision; i+=4) {
+        printf("thread %d write byte %x%x%x%x\n", tid, info.output[i], info.output[i + 1], info.output[i + 2], info.output[i + 3]);
+    }
+}
+#endif
 
     }
 

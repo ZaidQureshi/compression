@@ -27,9 +27,18 @@ namespace rlev2 {
 
 		if (which == 0) { // reading warp
 			uint64_t in_start_idx = blk_off[cid];
-			uint32_t* in_4B = (uint32_t *)(&(in[in_start_idx]));
+			uint32_t* in_4B = (uint32_t *)(&(in[in_start_idx])) + ERR_THREAD;
 			uint32_t in_4B_off = 0;	
+if (cid == ERR_CHUNK && tid == ERR_THREAD) {
+int of = 0;
+for (int i=0; i<4; ++i) {
+	printf("in4B pre: %x%x%x%x\n", ((uint8_t*)in_4B)[of+0],  
+	((uint8_t*)in_4B)[of+1],  ((uint8_t*)in_4B)[of+2], ((uint8_t*)in_4B)[of+3]);
+	of += 128;
+}
+}
 
+			in_4B -= ERR_THREAD;
 			uint8_t in_tail_ = 0;
 
 // if (tid == ERR_THREAD) printf("thrad %d with chunksize %u\n", tid, mychunk_size);
@@ -47,7 +56,13 @@ namespace rlev2 {
 
 					*(uint32_t*)(&in_[tid][in_tail_]) = in_4B[in_4B_off + __popc(read_sync & t_read_mask)];  
 					in_cnt_[tid].fetch_add(4, cuda::memory_order_release);
-
+if (cid == ERR_CHUNK && tid == ERR_THREAD) {
+	printf("in4B off[%u]: %x%x%x%x\n", in_4B_off,
+	in_[tid][in_tail_],
+	in_[tid][in_tail_ + 1], 
+	in_[tid][in_tail_ + 2], 
+	in_[tid][in_tail_ + 3]);
+}
 					in_tail_ = (in_tail_ + 4) % DECODE_BUFFER_COUNT;
 					in_4B_off += __popc(read_sync);
 					used_bytes += 4;
@@ -80,7 +95,8 @@ namespace rlev2 {
 
 			auto write_int = [&](INPUT_T i) {
  #ifdef DEBUG
- if (cid == ERR_CHUNK && tid == ERR_THREAD) printf("thread %d write int %u at idx %d\n", tid, i, (out_8B + out_buffer_ptr - out));
+ if (cid == ERR_CHUNK && tid == ERR_THREAD) 
+ printf("thread %d write int %u at idx %d\n", tid, i, (out_8B + out_buffer_ptr - out));
  #endif 
 
 				*(out_8B + out_buffer_ptr) = i; 
@@ -110,9 +126,10 @@ namespace rlev2 {
 			auto read_byte = [&]() {
 				while (in_cnt_[tid].load(cuda::memory_order_acquire) == 0) {
 					__nanosleep(1000);
-#ifdef DEBUG
+// #ifdef DEBUG
+// if (cid == ERR_CHUNK && tid == ERR_THREAD)
 // printf("chunk %d thread %d loop with %u < %u\n", cid, tid, used_bytes, mychunk_size);
-#endif
+// #endif
 					// if (out_buffer_ptr == WRITE_VEC_SIZE) {
 					// 	deque_int();
 					// }
@@ -122,9 +139,10 @@ namespace rlev2 {
 				// auto curr32 = in_[tid][in_head_ / 4].load(cuda::memory_order_relaxed);
 				// auto ret = ((uint8_t*)&curr32)[in_head_%4];
 
-				auto ret = in_ptr_[in_head_];
+				uint8_t ret = in_ptr_[in_head_];
 #ifdef DEBUG
-// if (cid == ERR_CHUNK && tid == ERR_THREAD) printf("thread %d read byte %x with %u < %u\n", tid, ret, used_bytes, mychunk_size);
+if (cid == ERR_CHUNK && tid == ERR_THREAD) 
+printf("chunk %d thread %d read byte %x with %u < %u\n", cid, tid, ret, used_bytes, mychunk_size);
 #endif
 				in_head_ = (in_head_ + 1) % DECODE_BUFFER_COUNT;
 				in_cnt_[tid].fetch_sub(1, cuda::memory_order_release);
@@ -157,27 +175,27 @@ namespace rlev2 {
 				if (!compute) break;
 				*/
 				auto first = read_byte();
-// #ifdef DEBUG
-// if (cid == ERR_CHUNK && tid == ERR_THREAD) {
-// 	switch(first & HEADER_MASK) {
-// 		case HEADER_SHORT_REPEAT: {
-// 			printf("===== case short repeat\n");
-// 		} break;
-// 		case HEADER_DIRECT: {
-// 			printf("===== case direct\n");
-// 		} break;
-// 		case HEADER_DELTA: {
-// 			printf("===== case DELTA\n");
-// 		} break;
-// 		case HEADER_PACTED_BASE: {
-// 			printf("===== case patched base\n");
-// 		} break;
-// 		default: {
-// 			printf("+++++ case should not exeist\n");
-// 		} break;
-// 	}
-// }
-// #endif
+#ifdef DEBUG
+if (cid == ERR_CHUNK && tid == ERR_THREAD) {
+	switch(first & HEADER_MASK) {
+		case HEADER_SHORT_REPEAT: {
+			printf("cid %d thread %d with ===== case short repeat\n", cid, tid);
+		} break;
+		case HEADER_DIRECT: {
+			printf("cid %d thread %d with ===== case direct\n", cid, tid);
+		} break;
+		case HEADER_DELTA: {
+			printf("cid %d thread %d with ===== case DELTA\n", cid, tid);
+		} break;
+		case HEADER_PACTED_BASE: {
+			printf("cid %d thread %d with ===== case patched base\n", cid, tid);
+		} break;
+		default: {
+			printf("+++++ case should not exeist\n");
+		} break;
+	}
+}
+#endif
 				switch(first & HEADER_MASK) {
 				case HEADER_SHORT_REPEAT: {
 					auto nbytes = ((first >> 3) & 0x07) + 1;
@@ -221,10 +239,15 @@ namespace rlev2 {
 					uint8_t len = ((static_cast<uint16_t>(first & 0x01) << 8) | read_byte()) + 1;
 
 					INPUT_T base_val = static_cast<INPUT_T>(read_uvarint());
+#ifdef DEBUG
+if (cid == ERR_CHUNK && tid == ERR_THREAD) 
+printf("tid %d read base: %d\n", tid, base_val);
+#endif
         			INPUT_T base_delta = static_cast<INPUT_T>(read_svarint());
-// #ifdef DEBUG
-// if (cid == ERR_CHUNK && tid == ERR_THREAD) printf("tid %d read base delta: %ld\n", tid, base_delta);
-// #endif
+#ifdef DEBUG
+if (cid == ERR_CHUNK && tid == ERR_THREAD) 
+printf("tid %d read base delta: %d\n", tid, base_delta);
+#endif
 					write_int(base_val);
 					base_val += base_delta;
 					write_int(base_val);
@@ -326,11 +349,11 @@ namespace rlev2 {
 						patch_gap += result >> pw;
 						uint32_t direct_out_ptr = base_out_ptr + patch_gap;
 
-						if (out_ptr - direct_out_ptr >= WRITE_VEC_SIZE || out_buffer_ptr == 0) {
-							out[(direct_out_ptr / READ_UNIT) * BLK_SIZE * READ_UNIT + (direct_out_ptr % READ_UNIT) + tid * READ_UNIT] |= static_cast<INPUT_T>(result & patch_mask) << fbw;
-						} else {
-							out_buffer[tid][direct_out_ptr % WRITE_VEC_SIZE] |= static_cast<INPUT_T>(result & patch_mask) << fbw;
-						}
+						// if (out_ptr - direct_out_ptr >= WRITE_VEC_SIZE || out_buffer_ptr == 0) {
+						// 	out[(direct_out_ptr / READ_UNIT) * BLK_SIZE * READ_UNIT + (direct_out_ptr % READ_UNIT) + tid * READ_UNIT] |= static_cast<INPUT_T>(result & patch_mask) << fbw;
+						// } else {
+						// 	out_buffer[tid][direct_out_ptr % WRITE_VEC_SIZE] |= static_cast<INPUT_T>(result & patch_mask) << fbw;
+						// }
 						
 					}
 				} break;

@@ -4,10 +4,10 @@
 #define INPUT_T int32_t //has to be signed type
 #define UINPUT_T uint32_t 
 
-#define ERR_THREAD 0
-#define ERR_CHUNK 69
+#define ERR_THREAD 2
+#define ERR_CHUNK 245
 
-// #define DEBUG
+#define DEBUG
 
 constexpr int WRITE_VEC_SIZE = 4;
 constexpr int READ_GRANULARITY = 1;
