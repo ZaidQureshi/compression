@@ -72,7 +72,8 @@ namespace rlev2 {
 // printf("thread %d waiting with mask %u with READ count %u\n", tid, read_sync, used_bytes);
 			}
 		} else if (which == 1) { // compute warp
-			INPUT_T* out_8B = out + (cid * CHUNK_SIZE / sizeof(INPUT_T) + tid * READ_UNIT); 
+			INPUT_T* out_8B = out + (cid * CHUNK_SIZE / sizeof(INPUT_T) + tid * READ_UNIT);
+			INPUT_T* base_out = out_8B; 
 			uint32_t out_ptr = 0;
 
 			uint8_t in_head_ = 0;
@@ -94,10 +95,12 @@ namespace rlev2 {
 			};
 
 			auto write_int = [&](INPUT_T i) {
- #ifdef DEBUG
+ #ifdef DEBUG_DECODE
+//  if (cid == ERR_CHUNK && tid == ERR_THREAD) 
  if (cid == ERR_CHUNK && tid == ERR_THREAD) 
- printf("thread %d write int %u at idx %d\n", tid, i, (out_8B + out_buffer_ptr - out));
+ printf("chunk %d thread %d write int %u at idx %d\n", cid, tid, i, (out_8B + out_buffer_ptr - out));
  #endif 
+				out_ptr ++;
 
 				*(out_8B + out_buffer_ptr) = i; 
 				out_buffer_ptr ++;
@@ -124,10 +127,15 @@ namespace rlev2 {
 			};
 			
 			auto read_byte = [&]() {
+
+if (used_bytes >= mychunk_size) {
+// printf("chunk %d thread %d loop with %u < %u\n", cid, tid, used_bytes, mychunk_size);
+
+				return (uint8_t)0;
+}
 				while (in_cnt_[tid].load(cuda::memory_order_acquire) == 0) {
 					__nanosleep(1000);
 // #ifdef DEBUG
-// if (cid == ERR_CHUNK && tid == ERR_THREAD)
 // printf("chunk %d thread %d loop with %u < %u\n", cid, tid, used_bytes, mychunk_size);
 // #endif
 					// if (out_buffer_ptr == WRITE_VEC_SIZE) {
@@ -140,7 +148,8 @@ namespace rlev2 {
 				// auto ret = ((uint8_t*)&curr32)[in_head_%4];
 
 				uint8_t ret = in_ptr_[in_head_];
-#ifdef DEBUG
+#ifdef DEBUG_DECODE
+// if (cid == ERR_CHUNK && tid == ERR_THREAD) 
 if (cid == ERR_CHUNK && tid == ERR_THREAD) 
 printf("chunk %d thread %d read byte %x with %u < %u\n", cid, tid, ret, used_bytes, mychunk_size);
 #endif
@@ -175,23 +184,24 @@ printf("chunk %d thread %d read byte %x with %u < %u\n", cid, tid, ret, used_byt
 				if (!compute) break;
 				*/
 				auto first = read_byte();
-#ifdef DEBUG
+#ifdef DEBUG_DECODE
+// if (cid == ERR_CHUNK && tid == ERR_THREAD) {
 if (cid == ERR_CHUNK && tid == ERR_THREAD) {
 	switch(first & HEADER_MASK) {
 		case HEADER_SHORT_REPEAT: {
-			printf("cid %d thread %d with ===== case short repeat\n", cid, tid);
+			printf("chunk %d thread %d with ===== case short repeat\n", cid, tid);
 		} break;
 		case HEADER_DIRECT: {
-			printf("cid %d thread %d with ===== case direct\n", cid, tid);
+			printf("chunk %d thread %d with ===== case direct\n", cid, tid);
 		} break;
 		case HEADER_DELTA: {
-			printf("cid %d thread %d with ===== case DELTA\n", cid, tid);
+			printf("chunk %d thread %d with ===== case DELTA\n", cid, tid);
 		} break;
 		case HEADER_PACTED_BASE: {
-			printf("cid %d thread %d with ===== case patched base\n", cid, tid);
+			printf("chunk %d thread %d with ===== case patched base\n", cid, tid);
 		} break;
 		default: {
-			printf("+++++ case should not exeist\n");
+			printf("chunk %d thread %d +++++ case should not exeist\n", cid, tid);
 		} break;
 	}
 }
@@ -354,11 +364,25 @@ printf("tid %d read base delta: %d\n", tid, base_delta);
 						// } else {
 						// 	out_buffer[tid][direct_out_ptr % WRITE_VEC_SIZE] |= static_cast<INPUT_T>(result & patch_mask) << fbw;
 						// }
+						// out[(direct_out_ptr / READ_UNIT) * BLK_SIZE * READ_UNIT + (direct_out_ptr % READ_UNIT) + tid * READ_UNIT] |= static_cast<INPUT_T>(result & patch_mask) << fbw;
+
+						//TODO: if use vec, this should be different
+						base_out[(direct_out_ptr / READ_UNIT) * BLK_SIZE * READ_UNIT + (direct_out_ptr % READ_UNIT)] |= (static_cast<INPUT_T>(result & patch_mask) << fbw);
+// #ifdef DEBUG_DECODE
+// if (cid == ERR_CHUNK && tid == ERR_THREAD) {
+// 	printf("chunk %d thread %d modify int to %d at %d\n", 
+// 	cid, tid, 
+// 	out_8B[(direct_out_ptr / READ_UNIT) * BLK_SIZE * READ_UNIT + (direct_out_ptr % READ_UNIT)],
+// 	(out_8B + (direct_out_ptr / READ_UNIT) * BLK_SIZE * READ_UNIT + (direct_out_ptr % READ_UNIT)) - out);
+// }
+// #endif
 						
 					}
 				} break;
 				}
 			}
+
+exit_loop:
 			if (out_buffer_ptr > 0) {
 				deque_int();
 			}

@@ -51,17 +51,20 @@ int main(int argc, char** argv) {
 
     uint8_t *t_out;
     auto encode_start = std::chrono::high_resolution_clock::now();
-    // rlev2::compress_gpu((int64_t*)in, lSize, t_out, encoded_bytes);
 
+    // rlev2::compress_gpu(in, lSize, t_out, encoded_bytes);
     rlev2::compress_gpu_transpose<READ_GRANULARITY>(in, lSize, encoded, encoded_bytes, n_chunks, blk_off, col_len);
+
     auto encode_end = std::chrono::high_resolution_clock::now();
 
     INPUT_T* decoded = nullptr;
     uint64_t decoded_bytes = 0;
 
     auto decode_start = std::chrono::high_resolution_clock::now();
-    // rlev2::decompress_gpu((uint8_t*)t_out, encoded_bytes, decoded, decoded_bytes);
+
+    // rlev2::decompress_gpu(t_out, encoded_bytes, decoded, decoded_bytes);
     rlev2::decompress_gpu<READ_GRANULARITY>(encoded, encoded_bytes, n_chunks, blk_off, col_len, decoded, decoded_bytes);
+    
     auto decode_end = std::chrono::high_resolution_clock::now();
 
     auto decomp = std::chrono::duration_cast<std::chrono::duration<double>>(decode_end - decode_start);
@@ -87,7 +90,7 @@ int main(int argc, char** argv) {
             // printf("fail at %d %lld(%lld)\n", i, in[i], decoded[i]);
 
             for (int k=i; k<i+128; k+=32) {
-            printf("fail at %d %lld(%lld)\n", k, in[k], decoded[k]);
+            fprintf(stderr, "fail at %d %lld(%lld)\n", k, in[k], decoded[k]);
 
             }
         }

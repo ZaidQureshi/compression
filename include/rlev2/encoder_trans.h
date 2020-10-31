@@ -179,8 +179,9 @@ if (!should_write) {
     }
 }
 
-// #ifdef DEBUG
-// if (should_write && cid == ERR_CHUNK && tid == ERR_THREAD) {
+// #ifdef DEBUG_DECODE
+// // if (should_write && cid == ERR_CHUNK && tid == ERR_THREAD) {
+// if (should_write && cid >= ERR_CHUNK) {
 //     for (int i=0; i<info.potision; i+=4) {
 //         printf("thread %d write byte %x%x%x%x\n", tid, info.output[i], info.output[i + 1], info.output[i + 2], info.output[i + 3]);
 //     }

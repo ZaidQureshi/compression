@@ -4,15 +4,16 @@
 #define INPUT_T int32_t //has to be signed type
 #define UINPUT_T uint32_t 
 
-#define ERR_THREAD 2
-#define ERR_CHUNK 245
+#define ERR_THREAD 0
+#define ERR_CHUNK 395
 
 // #define DEBUG
+#define DEBUG_DECODE
 
 constexpr int WRITE_VEC_SIZE = 4;
 constexpr int READ_GRANULARITY = 1;
 constexpr int DECODE_UNIT = 4; 
-constexpr uint64_t VARINT_MASK = 0x7f;
+constexpr UINPUT_T VARINT_MASK = 0x7f;
 
 constexpr uint8_t HEADER_MASK         = 0xc0;
 constexpr uint8_t HEADER_SHORT_REPEAT = 0b00000000;
@@ -60,7 +61,7 @@ constexpr   uint16_t MAX_LITERAL_SIZE_()        { return 128; }
 constexpr   uint8_t  MINIMUM_REPEAT_()          { return 3; }
 constexpr   uint8_t  MAXIMUM_REPEAT_()          { return 127 + MINIMUM_REPEAT_(); }
 // constexpr   uint64_t OUTPUT_CHUNK_SIZE_()       { return CHUNK_SIZE_() + (CHUNK_SIZE_() - 1) / MAX_LITERAL_SIZE_() * 4; }
-constexpr   uint64_t OUTPUT_CHUNK_SIZE_()       { return CHUNK_SIZE_() * 2; }
+constexpr   uint64_t OUTPUT_CHUNK_SIZE_()       { return CHUNK_SIZE_() * 3; }
 constexpr   uint32_t MAX_SHORT_REPEAT_LENGTH_() { return 10; }
 constexpr   uint8_t  HIST_LEN_()                { return 32; }
 

@@ -7,9 +7,10 @@
 #include "utils.h"
 
 namespace rlev2 {
+
     template<bool skip=false>
     struct encode_info {
- uint8_t *output;
+        uint8_t *output;
 
         INPUT_T deltas[MAX_LITERAL_SIZE];
         INPUT_T literals[MAX_LITERAL_SIZE];
@@ -39,6 +40,7 @@ namespace rlev2 {
         }
 
         int cid, tid;
+
     };
 
     typedef struct patch_blob {
@@ -621,8 +623,10 @@ namespace rlev2 {
 
                     determineEncoding(info);
 
+                    prev_delta = 0; 
                     for (uint32_t ii = 0; ii < MINIMUM_REPEAT; ++ii) {
                         literals[ii] = val;
+                        info.deltas[ii] = 0;
                     }
                     num_literals = MINIMUM_REPEAT;
                 }
