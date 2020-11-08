@@ -5,10 +5,11 @@
 #define UINPUT_T uint32_t 
 
 #define ERR_THREAD 0
-#define ERR_CHUNK 395
+#define ERR_CHUNK 141
 
 // #define DEBUG
 #define DEBUG_DECODE
+#define DEBUG_MORE
 
 constexpr int WRITE_VEC_SIZE = 4;
 constexpr int READ_GRANULARITY = 1;

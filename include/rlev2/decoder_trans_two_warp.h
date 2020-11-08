@@ -41,7 +41,7 @@ namespace rlev2 {
 			in_4B -= ERR_THREAD;
 			uint8_t in_tail_ = 0;
 
-// if (tid == ERR_THREAD) printf("thrad %d with chunksize %u\n", tid, mychunk_size);
+// if (cid == ERR_CHUNK) printf("thrad %d with chunksize %u\n", tid, mychunk_size);
 			const uint32_t t_read_mask = (0xffffffff >> (32 - tid));
 			while (true) {
 				bool read = used_bytes < mychunk_size;
@@ -73,7 +73,7 @@ namespace rlev2 {
 			}
 		} else if (which == 1) { // compute warp
 			INPUT_T* out_8B = out + (cid * CHUNK_SIZE / sizeof(INPUT_T) + tid * READ_UNIT);
-			INPUT_T* base_out = out_8B; 
+			INPUT_T* base_out = out + cid * CHUNK_SIZE / sizeof(INPUT_T); 
 			uint32_t out_ptr = 0;
 
 			uint8_t in_head_ = 0;
@@ -95,10 +95,16 @@ namespace rlev2 {
 			};
 
 			auto write_int = [&](INPUT_T i) {
+#ifdef DEBUG_MORE
+if (out_ptr >= 32 ) {
+	// printf("######################## chunk %d thread %d write more than needed\n", cid, tid);
+}
+
+#endif
  #ifdef DEBUG_DECODE
 //  if (cid == ERR_CHUNK && tid == ERR_THREAD) 
  if (cid == ERR_CHUNK && tid == ERR_THREAD) 
- printf("chunk %d thread %d write int %u at idx %d\n", cid, tid, i, (out_8B + out_buffer_ptr - out));
+ printf("chunk %d thread %d write int %u at index %ld\n", cid, tid, i, out_8B - out + out_buffer_ptr);
  #endif 
 				out_ptr ++;
 
@@ -150,8 +156,7 @@ if (used_bytes >= mychunk_size) {
 				uint8_t ret = in_ptr_[in_head_];
 #ifdef DEBUG_DECODE
 // if (cid == ERR_CHUNK && tid == ERR_THREAD) 
-if (cid == ERR_CHUNK && tid == ERR_THREAD) 
-printf("chunk %d thread %d read byte %x with %u < %u\n", cid, tid, ret, used_bytes, mychunk_size);
+// printf("chunk %d thread %d read byte %x with %u < %u\n", cid, tid, ret, used_bytes, mychunk_size);
 #endif
 				in_head_ = (in_head_ + 1) % DECODE_BUFFER_COUNT;
 				in_cnt_[tid].fetch_sub(1, cuda::memory_order_release);
@@ -382,7 +387,6 @@ printf("tid %d read base delta: %d\n", tid, base_delta);
 				}
 			}
 
-exit_loop:
 			if (out_buffer_ptr > 0) {
 				deque_int();
 			}

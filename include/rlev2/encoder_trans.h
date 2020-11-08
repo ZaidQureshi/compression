@@ -41,17 +41,17 @@ if (!should_write) {
     info.output = out + write_off;
 
 // #ifdef DEBUG
-if (should_write  && cid == ERR_CHUNK && tid == ERR_THREAD) 
-printf("chunk %d thread %d without offset %u\n", cid, tid, write_off);
+// if (should_write  && cid == ERR_CHUNK && tid == ERR_THREAD) 
+// printf("chunk %d thread %d without offset %u\n", cid, tid, write_off);
 // #endif
 // }
         
 
         INPUT_T prev_delta;
 
-        auto& num_literals = info.num_literals;
-        auto& fix_runlen = info.fix_runlen;
-        auto& var_runlen = info.var_runlen;
+        uint32_t& num_literals = info.num_literals;
+        uint32_t& fix_runlen = info.fix_runlen;
+        uint32_t& var_runlen = info.var_runlen;
         INPUT_T *literals = info.literals;
 
         int curr_read_offset = 0;
@@ -167,6 +167,11 @@ printf("chunk %d thread %d without offset %u\n", cid, tid, write_off);
 
 if (!should_write) {
     acc_col_len[BLK_SIZE * cid + tid] = info.potision;
+#ifdef DEBUG_MORE
+if (cid == ERR_CHUNK) {
+    printf("cid %d tid %d write chunk size %d\n", cid, tid, info.potision);
+}
+#endif
     auto col_len_4B = static_cast<unsigned long long int>((info.potision + 3) / 4 * 4);
     atomicAdd(&blk_len, col_len_4B);
     
@@ -179,14 +184,14 @@ if (!should_write) {
     }
 }
 
-// #ifdef DEBUG_DECODE
-// // if (should_write && cid == ERR_CHUNK && tid == ERR_THREAD) {
-// if (should_write && cid >= ERR_CHUNK) {
-//     for (int i=0; i<info.potision; i+=4) {
-//         printf("thread %d write byte %x%x%x%x\n", tid, info.output[i], info.output[i + 1], info.output[i + 2], info.output[i + 3]);
-//     }
-// }
-// #endif
+#ifdef DEBUG_MORE
+// if (should_write && cid == ERR_CHUNK && tid == ERR_THREAD) {
+if (should_write && cid == ERR_CHUNK && tid == ERR_THREAD) {
+    for (int i=0; i<info.potision; i+=4) {
+        printf("thread %d write byte %x%x%x%x\n", tid, info.output[i], info.output[i + 1], info.output[i + 2], info.output[i + 3]);
+    }
+}
+#endif
 
     }
 

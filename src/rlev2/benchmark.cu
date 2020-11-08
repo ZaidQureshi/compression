@@ -13,7 +13,7 @@
 #include <cuda/atomic>
 
 template<int read_unit>
-void benchmark(int64_t* in, uint64_t size) {
+void benchmark(INPUT_T* in, uint64_t size) {
     uint8_t *encoded = nullptr;
     uint64_t encoded_bytes = 0;
 
@@ -25,7 +25,7 @@ void benchmark(int64_t* in, uint64_t size) {
     rlev2::compress_gpu_transpose<read_unit>(in, size, encoded, encoded_bytes, n_chunks, blk_off, col_len);
     auto encode_end = std::chrono::high_resolution_clock::now();
 
-    int64_t *decoded = nullptr;
+    INPUT_T *decoded = nullptr;
     uint64_t decoded_bytes = 0;
 
     auto decode_start = std::chrono::high_resolution_clock::now();
@@ -46,13 +46,15 @@ void benchmark(int64_t* in, uint64_t size) {
     // }
     
     assert(decoded_bytes == size);
-    for (int i=0; i<decoded_bytes/sizeof(int64_t); ++i) {
+    for (int i = 0; i < decoded_bytes / sizeof(INPUT_T); ++i) {
         if (decoded[i] != in[i]) {
-            printf("fail at %d %ld(%ld)\n", i, in[i], decoded[i]);
+            for (int k=i; k<i+read_unit; ++k) {
+                fprintf(stderr, "fail at %d %u(%u)\n", k, in[k], decoded[k]);
+            }
         }
         assert(decoded[i] == in[i]);
     }
-
+    
     delete[] blk_off;
     delete[] col_len;
     delete[] encoded;
@@ -74,17 +76,18 @@ int main(int argc, char** argv) {
     }
     fstat(in_fd, &in_sb);
 
-    int64_t *in = (int64_t *)mmap(nullptr, in_sb.st_size, PROT_READ, MAP_PRIVATE, in_fd, 0);
+    INPUT_T *in = (INPUT_T *)mmap(nullptr, in_sb.st_size, PROT_READ, MAP_PRIVATE, in_fd, 0);
     if(in == (void*)-1){
         printf("fatal error: input mapping error\n");
         return -1;
     }
     close(in_fd);
 
-    benchmark<1>(in, in_sb.st_size);
-//    benchmark<2>(in, in_sb.st_size);
-//    benchmark<4>(in, in_sb.st_size);
-//    benchmark<8>(in, in_sb.st_size);
+    // benchmark<1>(in, in_sb.st_size);
+    // benchmark<4>(in, in_sb.st_size);
+    // benchmark<8>(in, in_sb.st_size);
+    // benchmark<16>(in, in_sb.st_size);
+    benchmark<32>(in, in_sb.st_size);
 
     
     if(munmap(in, in_sb.st_size) == -1) PRINT_ERROR;
