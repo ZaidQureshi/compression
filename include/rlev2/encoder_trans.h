@@ -167,11 +167,6 @@ if (!should_write) {
 
 if (!should_write) {
     acc_col_len[BLK_SIZE * cid + tid] = info.potision;
-#ifdef DEBUG_MORE
-if (cid == ERR_CHUNK) {
-    printf("cid %d tid %d write chunk size %d\n", cid, tid, info.potision);
-}
-#endif
     auto col_len_4B = static_cast<unsigned long long int>((info.potision + 3) / 4 * 4);
     atomicAdd(&blk_len, col_len_4B);
     
@@ -186,11 +181,11 @@ if (cid == ERR_CHUNK) {
 
 #ifdef DEBUG_MORE
 // if (should_write && cid == ERR_CHUNK && tid == ERR_THREAD) {
-if (should_write && cid == ERR_CHUNK && tid == ERR_THREAD) {
-    for (int i=0; i<info.potision; i+=4) {
-        printf("thread %d write byte %x%x%x%x\n", tid, info.output[i], info.output[i + 1], info.output[i + 2], info.output[i + 3]);
-    }
-}
+// if (should_write && cid == ERR_CHUNK && tid == ERR_THREAD) {
+//     for (int i=0; i<info.potision; i+=4) {
+//         printf("thread %d write byte %x%x%x%x\n", tid, info.output[i], info.output[i + 1], info.output[i + 2], info.output[i + 3]);
+//     }
+// }
 #endif
 
     }

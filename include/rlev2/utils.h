@@ -4,12 +4,12 @@
 #define INPUT_T int32_t //has to be signed type
 #define UINPUT_T uint32_t 
 
-#define ERR_THREAD 0
-#define ERR_CHUNK 141
+#define ERR_THREAD 12
+#define ERR_CHUNK 201
 
 // #define DEBUG
-#define DEBUG_DECODE
-#define DEBUG_MORE
+// #define DEBUG_DECODE
+// #define DEBUG_MORE
 
 constexpr int WRITE_VEC_SIZE = 4;
 constexpr int READ_GRANULARITY = 1;
@@ -56,7 +56,7 @@ constexpr uint8_t __CLOSEST_ALIGNED_FIXED_BIT_MAP[65] = {
 }; 
 
 constexpr   uint16_t BLK_SIZE_()                { return (32); }
-constexpr   uint64_t CHUNK_SIZE_()              { return (1024 * 4); }
+constexpr   uint64_t CHUNK_SIZE_()              { return (1024 * 8); }
 constexpr   uint32_t INPUT_BUFFER_SIZE()        { return (32); }
 constexpr   uint16_t MAX_LITERAL_SIZE_()        { return 128; }
 constexpr   uint8_t  MINIMUM_REPEAT_()          { return 3; }

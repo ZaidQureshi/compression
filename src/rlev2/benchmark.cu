@@ -83,10 +83,10 @@ int main(int argc, char** argv) {
     }
     close(in_fd);
 
-    // benchmark<1>(in, in_sb.st_size);
-    // benchmark<4>(in, in_sb.st_size);
-    // benchmark<8>(in, in_sb.st_size);
-    // benchmark<16>(in, in_sb.st_size);
+    benchmark<1>(in, in_sb.st_size);
+    benchmark<4>(in, in_sb.st_size);
+    benchmark<8>(in, in_sb.st_size);
+    benchmark<16>(in, in_sb.st_size);
     benchmark<32>(in, in_sb.st_size);
 
     

@@ -73,7 +73,8 @@ namespace rlev2 {
 			}
 		} else if (which == 1) { // compute warp
 			INPUT_T* out_8B = out + (cid * CHUNK_SIZE / sizeof(INPUT_T) + tid * READ_UNIT);
-			INPUT_T* base_out = out + cid * CHUNK_SIZE / sizeof(INPUT_T); 
+			INPUT_T* base_out = out + cid * CHUNK_SIZE / sizeof(INPUT_T);
+			// INPUT_T* base_out = out_8B;  
 			uint32_t out_ptr = 0;
 
 			uint8_t in_head_ = 0;
@@ -95,12 +96,11 @@ namespace rlev2 {
 			};
 
 			auto write_int = [&](INPUT_T i) {
-#ifdef DEBUG_MORE
-if (out_ptr >= 32 ) {
+// #ifdef DEBUG_MORE
+// if (out_ptr >= 32 ) {
 	// printf("######################## chunk %d thread %d write more than needed\n", cid, tid);
-}
-
-#endif
+// }
+// #endif
  #ifdef DEBUG_DECODE
 //  if (cid == ERR_CHUNK && tid == ERR_THREAD) 
  if (cid == ERR_CHUNK && tid == ERR_THREAD) 
@@ -303,6 +303,7 @@ printf("tid %d read base delta: %d\n", tid, base_delta);
 					uint8_t encoded_fbw = (first >> 1) & 0x1f;
 					uint8_t fbw = get_decoded_bit_width(encoded_fbw);
 					uint8_t len = ((static_cast<uint16_t>(first & 0x01) << 8) | read_byte()) + 1;
+					uint8_t raw_len = len;
 
 					uint8_t third = read_byte();
         			uint8_t forth = read_byte();
@@ -361,7 +362,7 @@ printf("tid %d read base delta: %d\n", tid, base_delta);
 							result |= (curr_byte >> bits_left) & ((1 << bits_to_read) - 1);
 						}
 
-						patch_gap += result >> pw;
+						patch_gap += (result >> pw);
 						uint32_t direct_out_ptr = base_out_ptr + patch_gap;
 
 						// if (out_ptr - direct_out_ptr >= WRITE_VEC_SIZE || out_buffer_ptr == 0) {
@@ -372,7 +373,17 @@ printf("tid %d read base delta: %d\n", tid, base_delta);
 						// out[(direct_out_ptr / READ_UNIT) * BLK_SIZE * READ_UNIT + (direct_out_ptr % READ_UNIT) + tid * READ_UNIT] |= static_cast<INPUT_T>(result & patch_mask) << fbw;
 
 						//TODO: if use vec, this should be different
-						base_out[(direct_out_ptr / READ_UNIT) * BLK_SIZE * READ_UNIT + (direct_out_ptr % READ_UNIT)] |= (static_cast<INPUT_T>(result & patch_mask) << fbw);
+#ifdef DEBUG_DECODE
+if (cid == ERR_CHUNK && tid == ERR_THREAD) printf("base out[%d] before: %u with patch %d\n", 
+patch_gap,
+base_out[(direct_out_ptr / READ_UNIT) * BLK_SIZE * READ_UNIT + (direct_out_ptr % READ_UNIT) + tid * READ_UNIT], 
+result);
+#endif
+						auto *pb_ptr = &base_out[(direct_out_ptr / READ_UNIT) * BLK_SIZE * READ_UNIT + (direct_out_ptr % READ_UNIT) + tid * READ_UNIT];
+						*pb_ptr -= base_val;
+						*pb_ptr |= (static_cast<INPUT_T>(result & patch_mask) << fbw);
+						*pb_ptr += base_val;
+						// base_out[(direct_out_ptr / READ_UNIT) * BLK_SIZE * READ_UNIT + (direct_out_ptr % READ_UNIT) + tid * READ_UNIT] |= (static_cast<INPUT_T>(result & patch_mask) << fbw);
 // #ifdef DEBUG_DECODE
 // if (cid == ERR_CHUNK && tid == ERR_THREAD) {
 // 	printf("chunk %d thread %d modify int to %d at %d\n", 
@@ -383,6 +394,10 @@ printf("tid %d read base delta: %d\n", tid, base_delta);
 // #endif
 						
 					}
+					// for (int i=0; i<raw_len; ++i) {
+					// 	int direct_out_ptr = base_out_ptr + i;
+					// 	base_out[(direct_out_ptr / READ_UNIT) * BLK_SIZE * READ_UNIT + (direct_out_ptr % READ_UNIT) + tid * READ_UNIT] += base_val;
+					// }
 				} break;
 				}
 			}
