@@ -1,8 +1,11 @@
 #ifndef _RLEV2_UTIL_H_
 #define _RLEV2_UTIL_H_
 
-#define INPUT_T int32_t //has to be signed type
-#define UINPUT_T uint32_t 
+#define READ_TYPE int32_t
+
+typedef std::conditional<sizeof(READ_TYPE) == sizeof(int32_t), int32_t, int64_t>::type INPUT_T;
+typedef std::conditional<sizeof(READ_TYPE) == sizeof(int32_t), uint32_t, uint64_t>::type UINPUT_T;
+typedef std::conditional<sizeof(READ_TYPE) == sizeof(int32_t), longlong2, longlong4>::type VEC_T;
 
 #define ERR_THREAD 6
 #define ERR_CHUNK 141
@@ -56,13 +59,13 @@ constexpr uint8_t __CLOSEST_ALIGNED_FIXED_BIT_MAP[65] = {
 }; 
 
 constexpr   uint16_t BLK_SIZE_()                { return (32); }
-constexpr   uint64_t CHUNK_SIZE_()              { return (1024 * 4); }
+constexpr   uint64_t CHUNK_SIZE_()              { return (1024 * 32); }
 constexpr   uint32_t INPUT_BUFFER_SIZE()        { return (32); }
 constexpr   uint16_t MAX_LITERAL_SIZE_()        { return 128; }
 constexpr   uint8_t  MINIMUM_REPEAT_()          { return 3; }
 constexpr   uint8_t  MAXIMUM_REPEAT_()          { return 127 + MINIMUM_REPEAT_(); }
 // constexpr   uint64_t OUTPUT_CHUNK_SIZE_()       { return CHUNK_SIZE_() + (CHUNK_SIZE_() - 1) / MAX_LITERAL_SIZE_() * 4; }
-constexpr   uint64_t OUTPUT_CHUNK_SIZE_()       { return CHUNK_SIZE_() * 3; }
+constexpr   uint64_t OUTPUT_CHUNK_SIZE_()       { return CHUNK_SIZE_() * 2; }
 constexpr   uint32_t MAX_SHORT_REPEAT_LENGTH_() { return 10; }
 constexpr   uint8_t  HIST_LEN_()                { return 32; }
 
@@ -103,7 +106,6 @@ __constant__ uint8_t device_decode_bit_map[32];
 
 __host__ __device__
 inline uint8_t get_encoded_bit_width(const uint8_t& bitwidth) {
-    // static constexpr uint8_t *encode_bit_map = bit_maps;
 #ifdef __CUDA_ARCH__
     return device_encode_bit_map[bitwidth];
 #else
@@ -113,7 +115,6 @@ inline uint8_t get_encoded_bit_width(const uint8_t& bitwidth) {
 
 __host__ __device__
 inline uint8_t get_decoded_bit_width(const uint8_t& bitwidth) {
-    // static constexpr uint8_t *decode_bit_map = bit_maps + 65 + 65 + 65;
 #ifdef __CUDA_ARCH__
     return device_decode_bit_map[bitwidth];
 #else
@@ -123,7 +124,6 @@ inline uint8_t get_decoded_bit_width(const uint8_t& bitwidth) {
 
 __host__ __device__
 inline uint8_t get_closest_bit(const uint8_t bit) {
-    // static constexpr uint8_t *closest_bit_map = bit_maps + 65;
 #ifdef __CUDA_ARCH__
     return device_closest_bit_map[bit];
 #else
@@ -133,7 +133,6 @@ inline uint8_t get_closest_bit(const uint8_t bit) {
 
 __host__ __device__
 inline uint8_t get_closest_aligned_bit(const uint8_t bit) {
-    // static constexpr uint8_t *closest_aligned_bit_map = bit_maps + 65 + 65;
 #ifdef __CUDA_ARCH__
     return device_closest_aligned_bit_map[bit];
 #else

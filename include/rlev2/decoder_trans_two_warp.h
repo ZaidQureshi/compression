@@ -27,21 +27,11 @@ namespace rlev2 {
 
 		if (which == 0) { // reading warp
 			uint64_t in_start_idx = blk_off[cid];
-			uint32_t* in_4B = (uint32_t *)(&(in[in_start_idx])) + ERR_THREAD;
+			uint32_t* in_4B = (uint32_t *)(&(in[in_start_idx]));
 			uint32_t in_4B_off = 0;	
-// if (cid == ERR_CHUNK && tid == ERR_THREAD) {
-// int of = 0;
-// for (int i=0; i<4; ++i) {
-// 	printf("in4B pre: %x%x%x%x\n", ((uint8_t*)in_4B)[of+0],  
-// 	((uint8_t*)in_4B)[of+1],  ((uint8_t*)in_4B)[of+2], ((uint8_t*)in_4B)[of+3]);
-// 	of += 128;
-// }
-// }
 
-			in_4B -= ERR_THREAD;
 			uint8_t in_tail_ = 0;
 
-// if (cid == ERR_CHUNK) printf("thrad %d with chunksize %u\n", tid, mychunk_size);
 			const uint32_t t_read_mask = (0xffffffff >> (32 - tid));
 			while (true) {
 				bool read = used_bytes < mychunk_size;
@@ -56,25 +46,16 @@ namespace rlev2 {
 
 					*(uint32_t*)(&in_[tid][in_tail_]) = in_4B[in_4B_off + __popc(read_sync & t_read_mask)];  
 					in_cnt_[tid].fetch_add(4, cuda::memory_order_release);
-// if (cid == ERR_CHUNK && tid == ERR_THREAD) {
-// 	printf("in4B off[%u]: %x%x%x%x\n", in_4B_off,
-// 	in_[tid][in_tail_],
-// 	in_[tid][in_tail_ + 1], 
-// 	in_[tid][in_tail_ + 2], 
-// 	in_[tid][in_tail_ + 3]);
-// }
 					in_tail_ = (in_tail_ + 4) % DECODE_BUFFER_COUNT;
 					in_4B_off += __popc(read_sync);
 					used_bytes += 4;
 				} else {
 					break;
 				}
-// printf("thread %d waiting with mask %u with READ count %u\n", tid, read_sync, used_bytes);
 			}
 		} else if (which == 1) { // compute warp
 			INPUT_T* out_8B = out + (cid * CHUNK_SIZE / sizeof(INPUT_T) + tid * READ_UNIT);
 			INPUT_T* base_out = out + cid * CHUNK_SIZE / sizeof(INPUT_T);
-			// INPUT_T* base_out = out_8B;  
 			uint32_t out_ptr = 0;
 
 			uint8_t in_head_ = 0;
@@ -83,9 +64,7 @@ namespace rlev2 {
 			uint8_t out_counter = 0;
 
 			auto deque_int = [&]() {
-				// return;
-				//TODO: 
-				*reinterpret_cast<longlong2*>(out_8B + out_counter) = *reinterpret_cast<longlong2*>(out_buffer[tid]);
+				*reinterpret_cast<VEC_T*>(out_8B + out_counter) = *reinterpret_cast<VEC_T*>(out_buffer[tid]);
 				
 				out_counter += WRITE_VEC_SIZE;
 				if (out_counter == READ_UNIT) {
@@ -96,26 +75,7 @@ namespace rlev2 {
 			};
 
 			auto write_int = [&](INPUT_T i) {
-// #ifdef DEBUG_MORE
-// if (out_ptr >= 32 ) {
-	// printf("######################## chunk %d thread %d write more than needed\n", cid, tid);
-// }
-// #endif
- #ifdef DEBUG_DECODE
-//  if (cid == ERR_CHUNK && tid == ERR_THREAD) 
- if (cid == ERR_CHUNK && tid == ERR_THREAD) 
- printf("chunk %d thread %d write int %u at index %ld\n", cid, tid, i, out_8B - out + out_buffer_ptr);
- #endif 
 				out_ptr ++;
-
-				// *(out_8B + out_buffer_ptr) = i; 
-				// out_buffer_ptr ++;
-				// if (out_buffer_ptr == READ_UNIT) {
-				// 	out_buffer_ptr = 0;
-				// 	out_8B += BLK_SIZE * READ_UNIT;
-				// }
-				// return;
-
 				if (READ_UNIT >= 4) {
 					if (out_buffer_ptr == WRITE_VEC_SIZE) {
 						deque_int();
@@ -133,24 +93,12 @@ namespace rlev2 {
 			
 			auto read_byte = [&]() {
 				while (in_cnt_[tid].load(cuda::memory_order_acquire) == 0) {
-					// __nanosleep(1000);
-// #ifdef DEBUG
-// printf("chunk %d thread %d loop with %u < %u\n", cid, tid, used_bytes, mychunk_size);
-// #endif
 					if (out_buffer_ptr == WRITE_VEC_SIZE) {
 						deque_int();
 					}
-					
 				}
 
-				// auto curr32 = in_[tid][in_head_ / 4].load(cuda::memory_order_relaxed);
-				// auto ret = ((uint8_t*)&curr32)[in_head_%4];
-
 				uint8_t ret = in_ptr_[in_head_];
-#ifdef DEBUG_DECODE
-// if (cid == ERR_CHUNK && tid == ERR_THREAD) 
-// printf("chunk %d thread %d read byte %x with %u < %u\n", cid, tid, ret, used_bytes, mychunk_size);
-#endif
 				in_head_ = (in_head_ + 1) % DECODE_BUFFER_COUNT;
 				in_cnt_[tid].fetch_sub(1, cuda::memory_order_release);
 				used_bytes += 1;
@@ -247,15 +195,7 @@ if (cid == ERR_CHUNK && tid == ERR_THREAD) {
 					uint8_t len = ((static_cast<uint16_t>(first & 0x01) << 8) | read_byte()) + 1;
 
 					INPUT_T base_val = static_cast<INPUT_T>(read_uvarint());
-#ifdef DEBUG
-if (cid == ERR_CHUNK && tid == ERR_THREAD) 
-printf("tid %d read base: %d\n", tid, base_val);
-#endif
         			INPUT_T base_delta = static_cast<INPUT_T>(read_svarint());
-#ifdef DEBUG
-if (cid == ERR_CHUNK && tid == ERR_THREAD) 
-printf("tid %d read base delta: %d\n", tid, base_delta);
-#endif
 					write_int(base_val);
 					base_val += base_delta;
 					write_int(base_val);
@@ -356,17 +296,6 @@ printf("tid %d read base delta: %d\n", tid, base_delta);
 
 						patch_gap += (result >> pw);
 						uint32_t direct_out_ptr = base_out_ptr + patch_gap;
-
-						
-						// out[(direct_out_ptr / READ_UNIT) * BLK_SIZE * READ_UNIT + (direct_out_ptr % READ_UNIT) + tid * READ_UNIT] |= static_cast<INPUT_T>(result & patch_mask) << fbw;
-
-						//TODO: if use vec, this should be different
-#ifdef DEBUG_DECODE
-if (cid == ERR_CHUNK && tid == ERR_THREAD) printf("base out[%d] before: %u with patch %d\n", 
-patch_gap,
-base_out[(direct_out_ptr / READ_UNIT) * BLK_SIZE * READ_UNIT + (direct_out_ptr % READ_UNIT) + tid * READ_UNIT], 
-result);
-#endif
 						INPUT_T *pb_ptr = nullptr;
 						if (READ_UNIT < 4) {
 							pb_ptr = &base_out[(direct_out_ptr / READ_UNIT) * BLK_SIZE * READ_UNIT + (direct_out_ptr % READ_UNIT) + tid * READ_UNIT];
@@ -378,33 +307,12 @@ result);
 								pb_ptr = &out_buffer[tid][direct_out_ptr % WRITE_VEC_SIZE];
 							}
 						}
-
-#ifdef DEBUG_DECODE
-int offset = pb_ptr - out;
-
-if (cid == ERR_CHUNK && tid == ERR_THREAD) {
-	printf("chuk %d thread %d patched base with absolute offset %d with before patch val %u\n", cid, tid, pb_ptr - out, *pb_ptr);
-}
-#endif
 						
 						*pb_ptr -= base_val;
 						*pb_ptr |= (static_cast<INPUT_T>(result & patch_mask) << fbw);
 						*pb_ptr += base_val;
-						// base_out[(direct_out_ptr / READ_UNIT) * BLK_SIZE * READ_UNIT + (direct_out_ptr % READ_UNIT) + tid * READ_UNIT] |= (static_cast<INPUT_T>(result & patch_mask) << fbw);
-// #ifdef DEBUG_DECODE
-// if (cid == ERR_CHUNK && tid == ERR_THREAD) {
-// 	printf("chunk %d thread %d modify int to %d at %d\n", 
-// 	cid, tid, 
-// 	out_8B[(direct_out_ptr / READ_UNIT) * BLK_SIZE * READ_UNIT + (direct_out_ptr % READ_UNIT)],
-// 	(out_8B + (direct_out_ptr / READ_UNIT) * BLK_SIZE * READ_UNIT + (direct_out_ptr % READ_UNIT)) - out);
-// }
-// #endif
 						
 					}
-					// for (int i=0; i<raw_len; ++i) {
-					// 	int direct_out_ptr = base_out_ptr + i;
-					// 	base_out[(direct_out_ptr / READ_UNIT) * BLK_SIZE * READ_UNIT + (direct_out_ptr % READ_UNIT) + tid * READ_UNIT] += base_val;
-					// }
 				} break;
 				}
 			}
