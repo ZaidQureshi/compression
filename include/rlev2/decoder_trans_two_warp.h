@@ -371,8 +371,8 @@ result);
 						if (READ_UNIT < 4) {
 							pb_ptr = &base_out[(direct_out_ptr / READ_UNIT) * BLK_SIZE * READ_UNIT + (direct_out_ptr % READ_UNIT) + tid * READ_UNIT];
 						} else {
-							// if (out_ptr - direct_out_ptr >= WRITE_VEC_SIZE || out_buffer_ptr == 0) {
-							if (out_ptr / WRITE_VEC_SIZE - direct_out_ptr / WRITE_VEC_SIZE > 0) {
+							if (out_ptr - direct_out_ptr >= WRITE_VEC_SIZE || out_buffer_ptr == 0) {
+							// if (out_ptr / WRITE_VEC_SIZE - direct_out_ptr / WRITE_VEC_SIZE > 0) {
 								pb_ptr = &base_out[(direct_out_ptr / READ_UNIT) * BLK_SIZE * READ_UNIT + (direct_out_ptr % READ_UNIT) + tid * READ_UNIT];
 							} else {
 								pb_ptr = &out_buffer[tid][direct_out_ptr % WRITE_VEC_SIZE];
@@ -382,8 +382,8 @@ result);
 #ifdef DEBUG_DECODE
 int offset = pb_ptr - out;
 
-if (offset == 2048) {
-	printf("chuk %d thread %d patched base with absolute offset %d\n", cid, tid, pb_ptr - out);
+if (cid == ERR_CHUNK && tid == ERR_THREAD) {
+	printf("chuk %d thread %d patched base with absolute offset %d with before patch val %u\n", cid, tid, pb_ptr - out, *pb_ptr);
 }
 #endif
 						
