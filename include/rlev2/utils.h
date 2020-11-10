@@ -4,8 +4,8 @@
 #define INPUT_T int32_t //has to be signed type
 #define UINPUT_T uint32_t 
 
-#define ERR_THREAD 12
-#define ERR_CHUNK 201
+#define ERR_THREAD 0
+#define ERR_CHUNK 1
 
 // #define DEBUG
 // #define DEBUG_DECODE

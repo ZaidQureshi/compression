@@ -83,9 +83,9 @@ namespace rlev2 {
 			uint8_t out_counter = 0;
 
 			auto deque_int = [&]() {
-				return;
+				// return;
 				//TODO: 
-				*reinterpret_cast<longlong4*>(out_8B + out_counter) = *reinterpret_cast<longlong4*>(out_buffer[tid]);
+				*reinterpret_cast<longlong2*>(out_8B + out_counter) = *reinterpret_cast<longlong2*>(out_buffer[tid]);
 				
 				out_counter += WRITE_VEC_SIZE;
 				if (out_counter == READ_UNIT) {
@@ -108,16 +108,15 @@ namespace rlev2 {
  #endif 
 				out_ptr ++;
 
-				*(out_8B + out_buffer_ptr) = i; 
-				out_buffer_ptr ++;
-				if (out_buffer_ptr == READ_UNIT) {
-					out_buffer_ptr = 0;
-					out_8B += BLK_SIZE * READ_UNIT;
-				}
-				return;
+				// *(out_8B + out_buffer_ptr) = i; 
+				// out_buffer_ptr ++;
+				// if (out_buffer_ptr == READ_UNIT) {
+				// 	out_buffer_ptr = 0;
+				// 	out_8B += BLK_SIZE * READ_UNIT;
+				// }
+				// return;
 
 				if (READ_UNIT >= 4) {
-					out_ptr ++;
 					if (out_buffer_ptr == WRITE_VEC_SIZE) {
 						deque_int();
 					}
@@ -133,20 +132,14 @@ namespace rlev2 {
 			};
 			
 			auto read_byte = [&]() {
-
-if (used_bytes >= mychunk_size) {
-// printf("chunk %d thread %d loop with %u < %u\n", cid, tid, used_bytes, mychunk_size);
-
-				return (uint8_t)0;
-}
 				while (in_cnt_[tid].load(cuda::memory_order_acquire) == 0) {
-					__nanosleep(1000);
+					// __nanosleep(1000);
 // #ifdef DEBUG
 // printf("chunk %d thread %d loop with %u < %u\n", cid, tid, used_bytes, mychunk_size);
 // #endif
-					// if (out_buffer_ptr == WRITE_VEC_SIZE) {
-					// 	deque_int();
-					// }
+					if (out_buffer_ptr == WRITE_VEC_SIZE) {
+						deque_int();
+					}
 					
 				}
 
@@ -303,7 +296,6 @@ printf("tid %d read base delta: %d\n", tid, base_delta);
 					uint8_t encoded_fbw = (first >> 1) & 0x1f;
 					uint8_t fbw = get_decoded_bit_width(encoded_fbw);
 					uint8_t len = ((static_cast<uint16_t>(first & 0x01) << 8) | read_byte()) + 1;
-					uint8_t raw_len = len;
 
 					uint8_t third = read_byte();
         			uint8_t forth = read_byte();
@@ -365,11 +357,7 @@ printf("tid %d read base delta: %d\n", tid, base_delta);
 						patch_gap += (result >> pw);
 						uint32_t direct_out_ptr = base_out_ptr + patch_gap;
 
-						// if (out_ptr - direct_out_ptr >= WRITE_VEC_SIZE || out_buffer_ptr == 0) {
-						// 	out[(direct_out_ptr / READ_UNIT) * BLK_SIZE * READ_UNIT + (direct_out_ptr % READ_UNIT) + tid * READ_UNIT] |= static_cast<INPUT_T>(result & patch_mask) << fbw;
-						// } else {
-						// 	out_buffer[tid][direct_out_ptr % WRITE_VEC_SIZE] |= static_cast<INPUT_T>(result & patch_mask) << fbw;
-						// }
+						
 						// out[(direct_out_ptr / READ_UNIT) * BLK_SIZE * READ_UNIT + (direct_out_ptr % READ_UNIT) + tid * READ_UNIT] |= static_cast<INPUT_T>(result & patch_mask) << fbw;
 
 						//TODO: if use vec, this should be different
@@ -379,7 +367,26 @@ patch_gap,
 base_out[(direct_out_ptr / READ_UNIT) * BLK_SIZE * READ_UNIT + (direct_out_ptr % READ_UNIT) + tid * READ_UNIT], 
 result);
 #endif
-						auto *pb_ptr = &base_out[(direct_out_ptr / READ_UNIT) * BLK_SIZE * READ_UNIT + (direct_out_ptr % READ_UNIT) + tid * READ_UNIT];
+						INPUT_T *pb_ptr = nullptr;
+						if (READ_UNIT < 4) {
+							pb_ptr = &base_out[(direct_out_ptr / READ_UNIT) * BLK_SIZE * READ_UNIT + (direct_out_ptr % READ_UNIT) + tid * READ_UNIT];
+						} else {
+							// if (out_ptr - direct_out_ptr >= WRITE_VEC_SIZE || out_buffer_ptr == 0) {
+							if (out_ptr / WRITE_VEC_SIZE - direct_out_ptr / WRITE_VEC_SIZE > 0) {
+								pb_ptr = &base_out[(direct_out_ptr / READ_UNIT) * BLK_SIZE * READ_UNIT + (direct_out_ptr % READ_UNIT) + tid * READ_UNIT];
+							} else {
+								pb_ptr = &out_buffer[tid][direct_out_ptr % WRITE_VEC_SIZE];
+							}
+						}
+
+#ifdef DEBUG_DECODE
+int offset = pb_ptr - out;
+
+if (offset == 2048) {
+	printf("chuk %d thread %d patched base with absolute offset %d\n", cid, tid, pb_ptr - out);
+}
+#endif
+						
 						*pb_ptr -= base_val;
 						*pb_ptr |= (static_cast<INPUT_T>(result & patch_mask) << fbw);
 						*pb_ptr += base_val;
@@ -402,7 +409,7 @@ result);
 				}
 			}
 
-			if (out_buffer_ptr > 0) {
+			if (READ_UNIT >= 4 && out_buffer_ptr > 0) {
 				deque_int();
 			}
 		}
