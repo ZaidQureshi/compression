@@ -123,35 +123,7 @@ namespace rlev2 {
 			};
 			
 			while (used_bytes < mychunk_size) {
-				/*
-				bool compute = used_bytes < mychunk_size;
-				unsigned compute_sync = __ballot_sync(0xffffffff, compute);
-				
-				if (!compute) break;
-				*/
 				auto first = read_byte();
-#ifdef DEBUG_DECODE
-// if (cid == ERR_CHUNK && tid == ERR_THREAD) {
-if (cid == ERR_CHUNK && tid == ERR_THREAD) {
-	switch(first & HEADER_MASK) {
-		case HEADER_SHORT_REPEAT: {
-			printf("chunk %d thread %d with ===== case short repeat\n", cid, tid);
-		} break;
-		case HEADER_DIRECT: {
-			printf("chunk %d thread %d with ===== case direct\n", cid, tid);
-		} break;
-		case HEADER_DELTA: {
-			printf("chunk %d thread %d with ===== case DELTA\n", cid, tid);
-		} break;
-		case HEADER_PACTED_BASE: {
-			printf("chunk %d thread %d with ===== case patched base\n", cid, tid);
-		} break;
-		default: {
-			printf("chunk %d thread %d +++++ case should not exeist\n", cid, tid);
-		} break;
-	}
-}
-#endif
 				switch(first & HEADER_MASK) {
 				case HEADER_SHORT_REPEAT: {
 					auto nbytes = ((first >> 3) & 0x07) + 1;
@@ -300,14 +272,19 @@ if (cid == ERR_CHUNK && tid == ERR_THREAD) {
 						if (READ_UNIT < 4) {
 							pb_ptr = &base_out[(direct_out_ptr / READ_UNIT) * BLK_SIZE * READ_UNIT + (direct_out_ptr % READ_UNIT) + tid * READ_UNIT];
 						} else {
-							if (out_ptr - direct_out_ptr >= WRITE_VEC_SIZE || out_buffer_ptr == 0) {
-							// if (out_ptr / WRITE_VEC_SIZE - direct_out_ptr / WRITE_VEC_SIZE > 0) {
+							// if (out_ptr - direct_out_ptr >= WRITE_VEC_SIZE || out_buffer_ptr == 0) {
+							if (out_ptr / WRITE_VEC_SIZE - direct_out_ptr / WRITE_VEC_SIZE > 1) {
 								pb_ptr = &base_out[(direct_out_ptr / READ_UNIT) * BLK_SIZE * READ_UNIT + (direct_out_ptr % READ_UNIT) + tid * READ_UNIT];
+							} else if (out_ptr / WRITE_VEC_SIZE - direct_out_ptr / WRITE_VEC_SIZE == 1) {
+								if (out_buffer_ptr == 0) {
+									pb_ptr = &base_out[(direct_out_ptr / READ_UNIT) * BLK_SIZE * READ_UNIT + (direct_out_ptr % READ_UNIT) + tid * READ_UNIT];
+								} else {
+									pb_ptr = &out_buffer[tid][direct_out_ptr % WRITE_VEC_SIZE];
+								}
 							} else {
 								pb_ptr = &out_buffer[tid][direct_out_ptr % WRITE_VEC_SIZE];
 							}
 						}
-						
 						*pb_ptr -= base_val;
 						*pb_ptr |= (static_cast<INPUT_T>(result & patch_mask) << fbw);
 						*pb_ptr += base_val;

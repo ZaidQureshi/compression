@@ -550,11 +550,6 @@ printf("header patched with pb %d with fbw %d \n", pb.patch_width, (get_encoded_
         //     printf("lit:%ld\n", pb.reduced_literals[i]);
         // }
 
-if (info.cid == ERR_CHUNK && info.tid == ERR_THREAD) {
-for (int i=0; i< info.num_literals; ++i) {
-    printf("write base ints %u\n", pb.reduced_literals[i]);
-}
-}
         write_unaligned_ints(pb.reduced_literals, info.num_literals, closestFixedBits, info); //TODO
         closestFixedBits = get_closest_bit(pb.patch_gap_width + pb.patch_width);
         // for (int i=0; i<pb.patch_len; ++i) {

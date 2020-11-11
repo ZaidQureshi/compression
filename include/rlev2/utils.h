@@ -1,18 +1,16 @@
 #ifndef _RLEV2_UTIL_H_
 #define _RLEV2_UTIL_H_
 
-#define READ_TYPE int32_t
+#define READ_TYPE int64_t
 
 typedef std::conditional<sizeof(READ_TYPE) == sizeof(int32_t), int32_t, int64_t>::type INPUT_T;
 typedef std::conditional<sizeof(READ_TYPE) == sizeof(int32_t), uint32_t, uint64_t>::type UINPUT_T;
 typedef std::conditional<sizeof(READ_TYPE) == sizeof(int32_t), longlong2, longlong4>::type VEC_T;
 
-#define ERR_THREAD 6
-#define ERR_CHUNK 141
+#define ERR_THREAD 10
+#define ERR_CHUNK 330
 
 // #define DEBUG
-// #define DEBUG_DECODE
-// #define DEBUG_MORE
 
 constexpr int WRITE_VEC_SIZE = 4;
 constexpr int READ_GRANULARITY = 1;
@@ -59,7 +57,7 @@ constexpr uint8_t __CLOSEST_ALIGNED_FIXED_BIT_MAP[65] = {
 }; 
 
 constexpr   uint16_t BLK_SIZE_()                { return (32); }
-constexpr   uint64_t CHUNK_SIZE_()              { return (1024 * 32); }
+constexpr   uint64_t CHUNK_SIZE_()              { return (1024 * 4); }
 constexpr   uint32_t INPUT_BUFFER_SIZE()        { return (32); }
 constexpr   uint16_t MAX_LITERAL_SIZE_()        { return 128; }
 constexpr   uint8_t  MINIMUM_REPEAT_()          { return 3; }
