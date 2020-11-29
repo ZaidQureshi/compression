@@ -242,7 +242,10 @@ if (!should_write) {
     void compress_gpu_transpose(const INPUT_T* const in, const uint64_t in_n_bytes, uint8_t*& out, uint64_t& out_n_bytes,
                     uint64_t& out_n_chunks, blk_off_t *&blk_off, col_len_t *&col_len) {
         printf("Calling compress kernel.\n");
-        uint32_t n_chunks = (in_n_bytes - 1) / CHUNK_SIZE + 1;
+
+        const uint64_t padded_n_bytes = ((in_n_bytes - 1) / CHUNK_SIZE + 1) * CHUNK_SIZE;
+
+        uint32_t n_chunks = (padded_n_bytes - 1) / CHUNK_SIZE + 1;
         out_n_chunks = n_chunks;
         
         INPUT_T *d_in;
@@ -250,13 +253,8 @@ if (!should_write) {
         col_len_t *d_col_len, *d_acc_col_len; //accumulated col len 
         blk_off_t *d_blk_off;
         
-        // printf("input chunk: %lu\n", CHUNK_SIZE);
-        // printf("output chunk: %lu\n", n_chunks * OUTPUT_CHUNK_SIZE);
-
-        // printf("in_n_bytes: %lu\n", in_n_bytes);
-        // printf("n_chunks: %u\n", n_chunks);
-
-	    cuda_err_chk(cudaMalloc(&d_in, in_n_bytes));
+	    cuda_err_chk(cudaMalloc(&d_in, padded_n_bytes));
+	    cuda_err_chk(cudaMemset(d_in, 0, padded_n_bytes));
         cuda_err_chk(cudaMalloc(&d_out, n_chunks * OUTPUT_CHUNK_SIZE));
 	    cuda_err_chk(cudaMalloc(&d_col_len, sizeof(col_len_t) * n_chunks * BLK_SIZE));
 	    cuda_err_chk(cudaMalloc(&d_acc_col_len, sizeof(col_len_t) * n_chunks * BLK_SIZE));
@@ -266,7 +264,7 @@ if (!should_write) {
         
         initialize_bit_maps();
 
-        block_encode<false, READ_UNIT><<<n_chunks, BLK_SIZE>>>(d_in, in_n_bytes, 
+        block_encode<false, READ_UNIT><<<n_chunks, BLK_SIZE>>>(d_in, padded_n_bytes, 
                 d_out, d_col_len,  d_blk_off);
 
 	    cuda_err_chk(cudaDeviceSynchronize()); 
@@ -277,9 +275,7 @@ if (!should_write) {
         thrust::inclusive_scan(thrust::device, d_col_len, d_col_len + n_chunks * BLK_SIZE, d_acc_col_len);
 	    cuda_err_chk(cudaDeviceSynchronize()); 
 
-        // block_encode_new_write<<<n_chunks, BLK_SIZE>>>(d_in, in_n_bytes, 
-        //                     d_out, d_acc_col_len,  d_blk_off);
-        block_encode<true, READ_UNIT><<<n_chunks, BLK_SIZE>>>(d_in, in_n_bytes, 
+        block_encode<true, READ_UNIT><<<n_chunks, BLK_SIZE>>>(d_in, padded_n_bytes, 
                             d_out, d_acc_col_len,  d_blk_off);
 	    cuda_err_chk(cudaDeviceSynchronize()); 
 

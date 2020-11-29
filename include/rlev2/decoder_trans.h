@@ -20,8 +20,9 @@ namespace rlev2 {
 		col_len_t *d_col_len;
 
 		auto exp_out_n_bytes = blk_off[n_chunks];
-		out_n_bytes = exp_out_n_bytes;
+		const uint64_t exp_out_padded_bytes = ((exp_out_n_bytes - CHUNK_SIZE) / CHUNK_SIZE + 1) * CHUNK_SIZE;
 
+		out_n_bytes = exp_out_n_bytes;
 
 		cuda_err_chk(cudaMalloc(&d_in, in_n_bytes));
 		cuda_err_chk(cudaMalloc(&d_out, exp_out_n_bytes));
