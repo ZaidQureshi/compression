@@ -71,6 +71,7 @@ void test_decode_testcase(uint32_t* tests, int num_test, const int16_t* counts, 
 	cudaFree(d_symbols);
 }
 
+//Construct huffman tree
 __device__ 
 void construct(int16_t* counts, int16_t* symbols, const int16_t *length, int num_codes){
 
@@ -169,18 +170,134 @@ void test_construct(){
 
 
 
-
+//construct huffman tree for dynamic huffman encoding block
 __device__
-void decode_code_len(){
+int decode_dynamic(){
 	int hlit, hdist, hclen;
 
 	//getting the meta data for the compressed block
-//	fetch_n_bits<int>(5, hlit);
-//	fetch_n_bits<int>(5, hdist);
-//	fetch_n_bits<int>(4, hclen);
-//	hlit += 257;
-//	hdist += 1;
-//	hclen += 4;
+	fetch_n_bits<int>(5, hlit);
+	fetch_n_bits<int>(5, hdist);
+	fetch_n_bits<int>(4, hclen);
+	hlit += 257;
+	hdist += 1;
+	hclen += 4;
+ 
+ 	//check
+ 	for (index = 0; index < ncode; index++) lengths[g_code_order[index]] = getbits(s, 3);
+  	for (; index < 19; index++) lengths[g_code_order[index]] = 0;
+
+
+	construct(s, s->lencnt, s->lensym, lengths, 19);
+
+	
+	int index = 0;
+	while (index < nlen + ndist) {
+		int symbol = decode(s, s->lencnt, s->lensym);
+		if (symbol < 0) return symbol; //error
+
+		//represent code lengths of 0 - 15
+		if(symbol < 16)
+			lengths[index++] = symbol;
+
+		else{
+			int len = 0;
+			if(symbol == 16) {
+				 len = lengths[index - 1];  // last length
+				 fetch_n_bits<int>(2, symbol);
+				 symbol += 3;
+			}
+			else if(symbol == 17){
+				fetch_n_bits<int>(3, symbol);
+				symbol += 3;
+			}
+			else {
+				fetch_n_bits<int>(7, symbol);
+				symbol += 11;
+			}
+
+			while(symbol--)
+				lenghts[index++] = len;
+		}
+	}
+
+	//check
+	if(lengts[256] == 0) return -9;
+
+
+	construct(s, s->lencnt, s->lensym, lengths, nlen);
+    
+    construct(s, s->distcnt, s->distsym, &lengths[nlen], ndist);
+
+	return 0;
+}
+
+
+//code starts from 257
+static const __device__ __constant__ uint16_t g_lens[29] = {  // Size base for length codes 257..285
+  3,  4,  5,  6,  7,  8,  9,  10, 11,  13,  15,  17,  19,  23, 27,
+  31, 35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258};
+
+//code starts from 257
+static const __device__ __constant__ uint16_t
+  g_lext[29] = { 
+    0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0};
+
+
+static const __device__ __constant__ uint16_t
+  g_dists[30] = {  // Offset base for distance codes 0..29
+    1,   2,   3,   4,   5,   7,    9,    13,   17,   25,   33,   49,   65,    97,    129,
+    193, 257, 385, 513, 769, 1025, 1537, 2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577};
+
+static const __device__ __constant__ uint16_t g_dext[30] = {  // Extra bits for distance codes 0..29
+  0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13};
+
+
+
+//decode code for compressed block
+__device__ decode_symbol() {
+
+
+	uint16_t sym = decode(test,  s->lencnt, s->lensym);
+
+
+	//parse 5 bits
+
+	//not compressed, literal
+	if(sym < 255) {
+
+	}
+
+	//end of block
+	else if(sym == 256) {
+
+	}
+
+	//lenght, need to parse
+	else{
+		uint16_t extra_bits = g_lext[sym - 257];
+
+		uint16_t extra_len  = 0;
+		if(extra_bits != 0)
+			fetch_n_bits<uint16_t>(extra_bits, extra_len);
+
+		uint16_t len = extra_len + g_lens[sym - 257];
+
+
+		//distance, 5bits
+		uint16_t sym_dist = decode(test,  s->distcnt, s->distsym);
+		uint16_t extra_bits_dist = g_dext[sym_dist];
+		
+		uint16_t extra_len_dist = 0;
+		if(extra_bits_dist != 0)
+			fetch_n_bits<uint16_t>(extra_bits_dist, extra_len_dist);
+
+		uint16_t dist = extra_len_dist + g_dists[dist];
+
+		//(len, dist_len)
+
+	}
+
 }
 
 
