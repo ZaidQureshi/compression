@@ -329,6 +329,12 @@ struct decompress_output {
         out_ptr[write_counter + (write_counter/write_col_len) * (31*write_col_len) + t_off] = b;
     }
 
+    __device__
+    void copy_byte(uint64_t read_counter, uint64_t write_counter, uint32_t t_off){
+        out_ptr[write_counter + (write_counter/write_col_len) * (31*write_col_len) + t_off] =
+            out_ptr[read_counter + (read_counter/write_col_len) * (31*write_col_len) + t_off];
+    }
+
 
     __device__
     void col_memcpy(uint32_t idx, uint32_t len, uint32_t offset) {
@@ -355,11 +361,12 @@ struct decompress_output {
             if(read_counter >= orig_counter){
                 read_counter = (read_counter - orig_counter) % offset + start_counter;
             }
-            uint8_t read_byte = 0;
-            get_byte(read_counter, &read_byte, t_off);
-            read_counter = read_counter + 32;
+            //uint8_t read_byte = 0;
+           // get_byte(read_counter, &read_byte, t_off);
+            copy_byte(read_counter, write_counter, t_off);
+            read_counter += 32;
            
-            write_byte(write_counter, read_byte, t_off);
+            //write_byte(write_counter, read_byte, t_off);
             write_counter += 32;
         }
 
@@ -763,24 +770,24 @@ void writer_warp(queue<uint64_t>& mq, decompress_output<WRITE_COL_LEN>& out) {
 }
 
 
-
 template <typename READ_COL_TYPE, size_t WRITE_COL_LEN = 512, size_t CHUNK_SIZE = 8192>
-__global__
-void inflate(uint8_t* comp_ptr, uint64_t* col_len_ptr, uint64_t* blk_offset_ptr, uint8_t*out) {
-    __shared__ READ_COL_TYPE in_queue_[32][5];
+__global__ void 
+__launch_bounds__(96, 10) 
+inflate(uint8_t* comp_ptr, uint64_t* col_len_ptr, uint64_t* blk_offset_ptr, uint8_t*out) {
+    __shared__ READ_COL_TYPE in_queue_[32][16];
     __shared__ simt::atomic<uint32_t,simt::thread_scope_block> h[32];
     __shared__ simt::atomic<uint32_t,simt::thread_scope_block> t[32];
 
 
     int lane_id = threadIdx.x % 32;
-    queue<READ_COL_TYPE> in_queue(in_queue_[lane_id], &h[lane_id], &t[lane_id], 5);
+    queue<READ_COL_TYPE> in_queue(in_queue_[lane_id], &h[lane_id], &t[lane_id], 16);
 
-    __shared__ uint64_t out_queue_[32][5];
+    __shared__ uint64_t out_queue_[32][8];
     __shared__ simt::atomic<uint32_t,simt::thread_scope_block> out_h[32];
     __shared__ simt::atomic<uint32_t,simt::thread_scope_block> out_t[32];
 
 
-    queue<uint64_t> out_queue(out_queue_[lane_id], &out_h[lane_id], &out_t[lane_id], 5);
+    queue<uint64_t> out_queue(out_queue_[lane_id], &out_h[lane_id], &out_t[lane_id], 8);
 
 
     bool is_reader_warp = (threadIdx.y == 0);
@@ -794,16 +801,13 @@ void inflate(uint8_t* comp_ptr, uint64_t* col_len_ptr, uint64_t* blk_offset_ptr,
 
     if (is_reader_warp) {
         uint64_t blk_off = blk_offset_ptr[blockIdx.x];
-        blk_off = 0;
         uint8_t* chunk_ptr = &(comp_ptr[blk_off]);
-
-
         decompress_input<READ_COL_TYPE> d(chunk_ptr, col_len);
         reader_warp<READ_COL_TYPE>(d, in_queue);
     }
 
     if (is_decoder_warp) {
-        input_stream<READ_COL_TYPE, 5> s(&in_queue, (uint32_t)col_len);
+        input_stream<READ_COL_TYPE, 16> s(&in_queue, (uint32_t)col_len);
         decoder_warp<READ_COL_TYPE>(s, out_queue, (uint32_t) col_len, out);
     }
 
@@ -884,7 +888,7 @@ template <typename READ_COL_TYPE>
     dim3 blockD(32,3,1);
     dim3 gridD(num_blk,1,1);
     const size_t chunk_size = 8192;
-    inflate<READ_COL_TYPE, 32, chunk_size> <<<gridD,blockD>>> (d_in, d_col_len, d_blk_offset, d_out);
+    inflate<READ_COL_TYPE, 128, chunk_size> <<<gridD,blockD>>> (d_in, d_col_len, d_blk_offset, d_out);
 
     cudaDeviceSynchronize();
     cudaError_t error = cudaGetLastError();
