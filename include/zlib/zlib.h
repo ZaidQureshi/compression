@@ -333,6 +333,90 @@ struct decompress_output {
     void copy_byte(uint64_t read_counter, uint64_t write_counter, uint32_t t_off){
         out_ptr[write_counter + (write_counter/write_col_len) * (31*write_col_len) + t_off] =
             out_ptr[read_counter + (read_counter/write_col_len) * (31*write_col_len) + t_off];
+
+      
+    }
+
+    __device__
+    void copy_8byte(uint64_t read_counter, uint64_t write_counter, uint32_t t_off) {
+       int w_idx =  (write_counter + (write_counter/write_col_len) * (31*write_col_len) + t_off) / 8;
+       int r_idx = (read_counter + (read_counter/write_col_len) * (31*write_col_len) + t_off) / 8;
+       ((uint64_t*)out_ptr)[w_idx] = ((uint64_t*)out_ptr)[r_idx];
+
+
+
+    }
+
+    __device__ 
+    void new_memcpy(uint64_t read_counter, uint64_t write_counter, uint32_t len, uint32_t offset, uint32_t t_off) {
+        uint32_t write_len = len;
+        uint64_t rc = read_counter;
+        uint64_t wc = write_counter; 
+
+        int slow_bytes = min(write_len, (int)((8 -(size_t)(wc)) & 0x7));
+        
+        //number of bytes to write per thread
+        int slow_bytes_t = (max(slow_bytes - threadIdx.x, 0) + 31) / 32;
+
+        if (slow_bytes){
+            uint64_t temp_rc = rc + threadIdx.x;
+            uint64_t temp_wc = wc + threadIdx.x;
+            for (int i = 0; i < slow_bytes_t; i++){
+                copy_byte(temp_rc, temp_wc, t_off);
+                temp_rc += 32;
+                temp_wc += 32;
+            }
+            write_len -= slow_bytes;
+            wc += (slow_bytes);
+            rc += (slow_bytes);
+        }
+
+        __syncwarp();
+        int fast_bytes = write_len;
+        int fast_remain = fast_bytes & (~(32 - 1));
+        int fast_bytes_t = (max(fast_remain - threadIdx.x*8, 0) + 32*8 - 1) / (32*8);
+        if(fast_remain > 0){
+            fast_bytes_t = (fast_remain - threadIdx.x*8);
+            if(fast_bytes_t < 0)
+                fast_bytes_t = 0;
+
+            fast_bytes_t = ((fast_remain - threadIdx.x*8) + 32*8 - 1) / (32*8);
+        }
+
+        //8byte copy
+        if (fast_remain > 0) {
+           // printf("tid: %i fast bytes:%i, slow_bytes:%i wc: %lu, len: %lu\n",threadIdx.x, fast_bytes, slow_bytes, (unsigned long) wc ,(unsigned long)len);
+            uint64_t temp_rc = rc + threadIdx.x * 8;
+            uint64_t temp_wc = wc + threadIdx.x * 8;
+            for(int i = 0; i < fast_bytes_t; i++){
+                copy_8byte(temp_rc,temp_wc,t_off);
+                temp_rc += 8 * 32;
+                temp_wc += 8 * 32;
+            }
+            write_len -= fast_remain;
+            wc += fast_remain;
+            rc += fast_remain;
+        }
+        
+        slow_bytes = write_len;
+
+        //slow_copy remainder
+        if(write_len != 0){
+            //printf("tid: %i write_len:%lu,  wc: %lu, len: %lu\n",threadIdx.x, (unsigned long)write_len, (unsigned long) wc ,(unsigned long)len);
+
+            slow_bytes_t = (max(slow_bytes - threadIdx.x, 0) + 31) / 32;
+            //printf("tid: %i write_len:%lu,  slow_bytes_t: %lu, len: %lu\n",threadIdx.x, (unsigned long)write_len, (unsigned long) slow_bytes_t ,(unsigned long)len);
+                rc += threadIdx.x;
+                wc += threadIdx.x;
+              for (int i = 0; i < slow_bytes_t; i++){
+                //printf("copy tid: %i write_len:%lu,  slow_bytes_t: %lu, len: %lu\n",threadIdx.x, (unsigned long)write_len, (unsigned long) slow_bytes_t ,(unsigned long)len);
+           
+                copy_byte(rc, wc, t_off);
+                wc += 32;
+                rc += 32;
+            }
+        }
+
     }
 
 
@@ -354,22 +438,26 @@ struct decompress_output {
         uint64_t read_counter = start_counter + threadIdx.x;
         uint64_t write_counter = orig_counter + threadIdx.x;
 
-
-        for(int i = 0; i < num_writes; i++){
-
-            //check offset
-            if(read_counter >= orig_counter){
-                read_counter = (read_counter - orig_counter) % offset + start_counter;
-            }
-            //uint8_t read_byte = 0;
-           // get_byte(read_counter, &read_byte, t_off);
-            copy_byte(read_counter, write_counter, t_off);
-            read_counter += 32;
-           
-            //write_byte(write_counter, read_byte, t_off);
-            write_counter += 32;
+        if(offset > len){
+            new_memcpy(start_counter, orig_counter, len, offset, t_off);
+            __syncwarp();
         }
 
+        else {
+            for(int i = 0; i < num_writes; i++){
+
+                //check offset
+                if(read_counter >= orig_counter){
+                    read_counter = (read_counter - orig_counter) % offset + start_counter;
+                }
+
+                //uint8_t read_byte = 0;
+                copy_byte(read_counter, write_counter, t_off);
+                read_counter += 32;
+               
+                write_counter += 32;
+            }
+        }
         //set the counter
         if(threadIdx.x == idx)
             counter = counter + len;
@@ -728,9 +816,9 @@ void decoder_warp(input_stream<READ_COL_TYPE, in_buff_len>& s,  queue<uint64_t>&
 
 }
 
-template <size_t WRITE_COL_LEN = 512>
+template <size_t WRITE_COL_LEN = 512, size_t CHUNK_SIZE = 8192>
 __device__
-void writer_warp(queue<uint64_t>& mq, decompress_output<WRITE_COL_LEN>& out) {
+void writer_warp(queue<uint64_t>& mq, decompress_output<WRITE_COL_LEN, CHUNK_SIZE>& out) {
     
     uint32_t done = 0;
     while (!done) {
@@ -750,6 +838,7 @@ void writer_warp(queue<uint64_t>& mq, decompress_output<WRITE_COL_LEN>& out) {
                 uint64_t len = vv >> 17;
                 uint64_t offset = (vv>>1) & 0x0000ffff;
                 out.col_memcpy(f-1, (uint32_t)len, (uint32_t)offset);
+                //if(threadIdx.x == 0) printf("len: %llu offset: %llu\n", len, offset );
                 
             }
             //literal
@@ -772,7 +861,7 @@ void writer_warp(queue<uint64_t>& mq, decompress_output<WRITE_COL_LEN>& out) {
 
 template <typename READ_COL_TYPE, size_t WRITE_COL_LEN = 512, size_t CHUNK_SIZE = 8192>
 __global__ void 
-__launch_bounds__(96, 10) 
+__launch_bounds__(96, 15) 
 inflate(uint8_t* comp_ptr, uint64_t* col_len_ptr, uint64_t* blk_offset_ptr, uint8_t*out) {
     __shared__ READ_COL_TYPE in_queue_[32][16];
     __shared__ simt::atomic<uint32_t,simt::thread_scope_block> h[32];
@@ -782,12 +871,12 @@ inflate(uint8_t* comp_ptr, uint64_t* col_len_ptr, uint64_t* blk_offset_ptr, uint
     int lane_id = threadIdx.x % 32;
     queue<READ_COL_TYPE> in_queue(in_queue_[lane_id], &h[lane_id], &t[lane_id], 16);
 
-    __shared__ uint64_t out_queue_[32][8];
+    __shared__ uint64_t out_queue_[32][4];
     __shared__ simt::atomic<uint32_t,simt::thread_scope_block> out_h[32];
     __shared__ simt::atomic<uint32_t,simt::thread_scope_block> out_t[32];
 
 
-    queue<uint64_t> out_queue(out_queue_[lane_id], &out_h[lane_id], &out_t[lane_id], 8);
+    queue<uint64_t> out_queue(out_queue_[lane_id], &out_h[lane_id], &out_t[lane_id], 4);
 
 
     bool is_reader_warp = (threadIdx.y == 0);
@@ -801,6 +890,8 @@ inflate(uint8_t* comp_ptr, uint64_t* col_len_ptr, uint64_t* blk_offset_ptr, uint
 
     if (is_reader_warp) {
         uint64_t blk_off = blk_offset_ptr[blockIdx.x];
+
+
         uint8_t* chunk_ptr = &(comp_ptr[blk_off]);
         decompress_input<READ_COL_TYPE> d(chunk_ptr, col_len);
         reader_warp<READ_COL_TYPE>(d, in_queue);
@@ -815,7 +906,7 @@ inflate(uint8_t* comp_ptr, uint64_t* col_len_ptr, uint64_t* blk_offset_ptr, uint
 
         decompress_output<WRITE_COL_LEN, CHUNK_SIZE> d(&(out[CHUNK_SIZE * blockIdx.x]));
 
-         writer_warp(out_queue,d);
+         writer_warp<WRITE_COL_LEN, CHUNK_SIZE>(out_queue,d);
     }
 
 
@@ -876,7 +967,8 @@ template <typename READ_COL_TYPE>
     cuda_err_chk(cudaMemcpy(d_blk_offset, map_base_blk_off, sbblk_off.st_size, cudaMemcpyHostToDevice));
 
 
-    uint64_t out_bytes = (1024*8) * num_blk;
+    const size_t chunk_size = 8192 * 8;
+    uint64_t out_bytes = chunk_size * num_blk;
     printf("out_bytes: %llu\n", out_bytes);
 
     uint8_t* d_out;
@@ -887,8 +979,7 @@ template <typename READ_COL_TYPE>
 
     dim3 blockD(32,3,1);
     dim3 gridD(num_blk,1,1);
-    const size_t chunk_size = 8192;
-    inflate<READ_COL_TYPE, 128, chunk_size> <<<gridD,blockD>>> (d_in, d_col_len, d_blk_offset, d_out);
+    inflate<READ_COL_TYPE, 512, chunk_size> <<<gridD,blockD>>> (d_in, d_col_len, d_blk_offset, d_out);
 
     cudaDeviceSynchronize();
     cudaError_t error = cudaGetLastError();
