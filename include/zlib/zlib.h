@@ -29,7 +29,20 @@ struct dynamic_huffman {
     int16_t lensym[FIXLCODES];
     int16_t distcnt[MAXBITS + 1];
     int16_t distsym[MAXDCODES];
-};
+} __attribute__((aligned(16)));
+
+__forceinline__ __device__ unsigned warp_id()
+{
+    // this is not equal to threadIdx.x / 32
+    unsigned ret;
+    asm volatile ("mov.u32 %0, %warpid;" : "=r"(ret));
+    return ret;
+}
+__forceinline__ __device__ uint32_t get_smid() {
+     uint32_t ret;
+     asm  ("mov.u32 %0, %smid;" : "=r"(ret) );
+     return ret;
+}
 
 template <typename T>
 struct queue {
@@ -438,7 +451,9 @@ struct decompress_output {
         uint64_t read_counter = start_counter + threadIdx.x;
         uint64_t write_counter = orig_counter + threadIdx.x;
 
-        if(offset > len){
+        
+        //if(offset > len){
+        if(1 == 0){
             new_memcpy(start_counter, orig_counter, len, offset, t_off);
             __syncwarp();
         }
@@ -534,11 +549,14 @@ void construct(input_stream<READ_COL_TYPE, in_buff_len>& s, int16_t* counts, int
     int symbol;
     int len;
     int left;
-    for(len = 0; len <= MAXBITS; len++)
-        counts[len] = 0;
 
-    for(symbol = 0; symbol < num_codes; symbol++)
+    for(len = 0; len <= MAXBITS; len++){
+        counts[len] = 0;
+    }
+
+    for(symbol = 0; symbol < num_codes; symbol++){
         (counts[length[symbol]])++;
+    }
 
     left = 1;
     for(len = 1; len <= MAXBITS; len++){
@@ -560,6 +578,7 @@ void construct(input_stream<READ_COL_TYPE, in_buff_len>& s, int16_t* counts, int
                 symbols[offs[length[symbol]]++] = symbol;
         }
     }   
+
 }
 
 /// permutation of code length codes
@@ -570,22 +589,20 @@ static const __device__ __constant__ uint8_t g_code_order[19 + 1] = {
 //construct huffman tree for dynamic huffman encoding block
 template <typename READ_COL_TYPE, size_t in_buff_len = 3>
 __device__
-int decode_dynamic(input_stream<READ_COL_TYPE, in_buff_len>& s, dynamic_huffman &dt){
+int decode_dynamic(input_stream<READ_COL_TYPE, in_buff_len>& s, dynamic_huffman* huff_tree_ptr, unsigned warp_id, unsigned sm_id, int32_t* d_lengths){
     uint32_t hlit, hdist, hclen;
-
- 
+    unsigned buff_idx = (sm_id * 64 + warp_id)*32 + threadIdx.x;
     //getting the meta data for the compressed block
     s.template fetch_n_bits<uint32_t>(5, &hlit) ;
     s.template fetch_n_bits<uint32_t>(5, &hdist);
     s.template fetch_n_bits<uint32_t>(4, &hclen);
 
-    //if(threadIdx.x == 0) printf("hlit: %lu, hdist:%lu, hclen:%lu\n", (unsigned long)hlit,  (unsigned long)hdist,  (unsigned long)hclen );
     
-
     hlit += 257;
     hdist += 1;
     hclen += 4;
-    int32_t lengths[MAXCODES];
+    //int32_t lengths[MAXCODES];
+    int32_t* lengths = &(d_lengths[buff_idx * MAXCODES]);
     int index;
     //check
     for (index = 0; index < hclen; index++) {
@@ -596,23 +613,20 @@ int decode_dynamic(input_stream<READ_COL_TYPE, in_buff_len>& s, dynamic_huffman 
     for (; index < 19; index++) {
         lengths[g_code_order[index]] = 0;
     }
-    // if(threadIdx.x == 0){
-    //     for(int i = 0; i < 19;i++){
-    //         printf("length: %lu\n", (unsigned long) lengths[i] );
-    //     }
-    // }
-    construct(s, dt.lencnt, dt.lensym, lengths, 19);
 
-    
+    construct(s, huff_tree_ptr[(sm_id * 64 + warp_id)*32 + threadIdx.x].lencnt,  huff_tree_ptr[(sm_id * 64 + warp_id)*32 + threadIdx.x].lensym, lengths, 19);
+
+
     index = 0;
     while (index < hlit + hdist) {
-        int32_t symbol = (int32_t) decode(s, dt.lencnt, dt.lensym);
+        int32_t symbol = (int32_t) decode(s,huff_tree_ptr[(sm_id * 64 + warp_id)*32 + threadIdx.x].lencnt, huff_tree_ptr[(sm_id * 64 + warp_id)*32 + threadIdx.x].lensym);
+
         //error
         if (symbol < 0){ 
             return symbol;}
         //represent code lengths of 0 - 15
         if(symbol < 16){
-            lengths[index++] = symbol;
+            lengths[(index++)] = symbol;
         }
 
         else{
@@ -631,28 +645,29 @@ int decode_dynamic(input_stream<READ_COL_TYPE, in_buff_len>& s, dynamic_huffman 
                 symbol += 11;
             }
 
-
             while(symbol--){
                 lengths[index++] = len;
             }
         }
     }
 
+
     //check
     if(lengths[256] == 0) return -9;
 
 
-    construct(s, dt.lencnt, dt.lensym, lengths, hlit);
-    
-    construct(s, dt.distcnt, dt.distsym, &lengths[hlit], hdist);
+    construct(s, huff_tree_ptr[(sm_id * 64 + warp_id)*32 + threadIdx.x].lencnt, huff_tree_ptr[(sm_id * 64 + warp_id)*32 + threadIdx.x].lensym, lengths, hlit);
+    construct(s, huff_tree_ptr[(sm_id * 64 + warp_id)*32 + threadIdx.x].distcnt,  huff_tree_ptr[(sm_id * 64 + warp_id)*32 + threadIdx.x].distsym, &lengths[hlit], hdist);
 
     return 0;
 }
 
 template <typename READ_COL_TYPE, size_t in_buff_len = 3>
 __device__ 
-int decode_fixed(input_stream<READ_COL_TYPE, in_buff_len>& s, dynamic_huffman &dt){
-    int32_t lengths[MAXCODES];
+int decode_fixed(input_stream<READ_COL_TYPE, in_buff_len>& s, dynamic_huffman* huff_tree_ptr, unsigned warp_id, unsigned sm_id, int32_t* d_lengths){
+    //int32_t lengths[MAXCODES];
+    unsigned buff_idx = (sm_id * 64 + warp_id)*32 + threadIdx.x;
+    int32_t* lengths = &(d_lengths[buff_idx * MAXCODES]);
 
     int symbol;
 
@@ -661,11 +676,13 @@ int decode_fixed(input_stream<READ_COL_TYPE, in_buff_len>& s, dynamic_huffman &d
     for (; symbol < 280; symbol++) lengths[symbol] = 7;
     for (; symbol < FIXLCODES; symbol++) lengths[symbol] = 8;
     
-    construct(s, dt.lencnt, dt.lensym, lengths, FIXLCODES);
-    
+
+
+    construct(s, huff_tree_ptr[(sm_id * 64 + warp_id)*32 + threadIdx.x].lencnt,  huff_tree_ptr[(sm_id * 64 + warp_id)*32 + threadIdx.x].lensym, lengths, FIXLCODES);
+
     for (symbol = 0; symbol < MAXDCODES; symbol++) lengths[symbol] = 5;
  
-    construct(s, dt.distcnt, dt.distsym, lengths, MAXDCODES);
+    construct(s, huff_tree_ptr[(sm_id * 64 + warp_id)*32 + threadIdx.x].distcnt,  huff_tree_ptr[(sm_id * 64 + warp_id)*32 + threadIdx.x].distsym, lengths, MAXDCODES);
 
     return 0;
 }
@@ -698,7 +715,6 @@ __device__
 void decode_symbol(input_stream<READ_COL_TYPE, in_buff_len>& s,dynamic_huffman &dt, uint32_t* out_off, uint8_t*out,  queue<uint64_t>& mq) {
 
     uint32_t thread_off = threadIdx.x * 32 + blockIdx.x * (1024*8);
-
 
     while(1){
               
@@ -754,6 +770,66 @@ void decode_symbol(input_stream<READ_COL_TYPE, in_buff_len>& s,dynamic_huffman &
 }
 
 
+template <typename READ_COL_TYPE, size_t in_buff_len = 3>
+__device__ 
+void decode_symbol2(input_stream<READ_COL_TYPE, in_buff_len>& s, uint32_t* out_off, uint8_t*out,  queue<uint64_t>& mq, dynamic_huffman* huff_tree_ptr, unsigned warp_id, unsigned sm_id) {
+
+    uint32_t thread_off = threadIdx.x * 32 + blockIdx.x * (1024*8);
+    unsigned buff_idx = (sm_id * 64 + warp_id)*32 + threadIdx.x;
+
+    while(1){
+              
+        uint16_t sym = decode(s,  huff_tree_ptr[buff_idx].lencnt,  huff_tree_ptr[buff_idx].lensym);
+
+
+        //parse 5 bits
+        //not compressed, literal
+        if(sym <= 255) {
+
+            uint64_t literal = 0;
+            literal = literal | (sym << 1);
+            mq.enqueue(&literal);
+        }
+
+        //end of block
+        else if(sym == 256) {
+            break;
+        }
+
+        //lenght, need to parse
+        else{
+
+            uint16_t extra_bits = g_lext[sym - 257];
+
+            uint32_t extra_len  = 0;
+            if(extra_bits != 0)
+               s.template fetch_n_bits<uint32_t>(extra_bits, &extra_len);
+
+            uint32_t len = extra_len + g_lens[sym - 257];
+
+            
+            //distance, 5bits
+            uint16_t sym_dist = decode(s,  huff_tree_ptr[buff_idx].distcnt, huff_tree_ptr[buff_idx].distsym);    
+            uint32_t extra_bits_dist = g_dext[sym_dist];
+            
+            uint32_t extra_len_dist = 0;
+            if(extra_bits_dist != 0){
+                s.template fetch_n_bits<uint32_t>(extra_bits_dist, &extra_len_dist);
+            }
+
+            uint32_t dist = extra_len_dist + g_dists[sym_dist];
+
+            //(len, dist_len)
+            uint64_t pair_code = 1;
+            uint64_t long_len = len;
+            pair_code = pair_code | (long_len << 17) | (dist << 1);
+            mq.enqueue(&pair_code);
+          
+        }
+    }
+
+}
+
 
 
 
@@ -764,7 +840,13 @@ void decode_symbol(input_stream<READ_COL_TYPE, in_buff_len>& s,dynamic_huffman &
 //
 template <typename READ_COL_TYPE, size_t in_buff_len = 3>
 __device__
-void decoder_warp(input_stream<READ_COL_TYPE, in_buff_len>& s,  queue<uint64_t>& mq, uint32_t col_len, uint8_t* out) {
+void decoder_warp(input_stream<READ_COL_TYPE, in_buff_len>& s,  queue<uint64_t>& mq, uint32_t col_len, uint8_t* out, uint64_t* tree_histo_ptr, dynamic_huffman* huff_tree_ptr, int32_t* d_len) {
+
+
+    
+    unsigned warp_idx = warp_id();
+    unsigned sm_id = get_smid();
+
 
 
     uint32_t header;
@@ -772,37 +854,39 @@ void decoder_warp(input_stream<READ_COL_TYPE, in_buff_len>& s,  queue<uint64_t>&
 
     uint32_t out_b = 0;
 
-    // bool cont = false;
-    // uint8_t prev_type = UNCOMP;
-    // READ_COL_TYPE local;
+   
     uint32_t blast;
     uint32_t btype;
+
+    // unsigned long long int f_count = 0;
+    // unsigned long long int d_count = 0;
 
     do{
     s.template fetch_n_bits<uint32_t>(1, &blast);
     s.template fetch_n_bits<uint32_t>(2, &btype);
-    dynamic_huffman tree;
 
     //not compressed
     //not going to be used
     if(btype == 0){
         uint32_t temp;
         s.template fetch_n_bits<uint32_t>(col_len, &temp);
-
-
     }
     //fixed huffman
     else if(btype == 1) {
-        decode_fixed<READ_COL_TYPE, in_buff_len>(s, tree);
-        decode_symbol<READ_COL_TYPE, in_buff_len>(s, tree, &out_b, out, mq);
+        //atomicAdd((unsigned long long int*) &(tree_histo_ptr[0]), (unsigned long long int)1);
+        
+        //f_count++;
+        decode_fixed<READ_COL_TYPE, in_buff_len>(s, huff_tree_ptr, warp_idx, sm_id, d_len);
+        decode_symbol2<READ_COL_TYPE, in_buff_len>(s, &out_b, out, mq, huff_tree_ptr, warp_idx, sm_id);
 
     }
     //dyamic huffman
     else if (btype == 2) {
+        //d_count++;
         //build dynamic huffman tree
-        int dyn = decode_dynamic<READ_COL_TYPE, in_buff_len>(s, tree);
+        int dyn = decode_dynamic<READ_COL_TYPE, in_buff_len>(s, huff_tree_ptr, warp_idx, sm_id, d_len);
         //decode LZ
-        decode_symbol<READ_COL_TYPE, in_buff_len>(s, tree, &out_b, out, mq);
+        decode_symbol2<READ_COL_TYPE, in_buff_len>(s, &out_b, out, mq, huff_tree_ptr, warp_idx, sm_id);
 
     }
     //error
@@ -813,12 +897,16 @@ void decoder_warp(input_stream<READ_COL_TYPE, in_buff_len>& s,  queue<uint64_t>&
 
     }while(blast != 1);
 
+    // atomicAdd((unsigned long long int*) &(tree_histo_ptr[0]), (unsigned long long int)f_count);
+    // atomicAdd((unsigned long long int*) &(tree_histo_ptr[1]), (unsigned long long int)d_count);
+
+
 
 }
 
 template <size_t WRITE_COL_LEN = 512, size_t CHUNK_SIZE = 8192>
 __device__
-void writer_warp(queue<uint64_t>& mq, decompress_output<WRITE_COL_LEN, CHUNK_SIZE>& out) {
+void writer_warp(queue<uint64_t>& mq, decompress_output<WRITE_COL_LEN, CHUNK_SIZE>& out, uint64_t* histo_ptr) {
     
     uint32_t done = 0;
     while (!done) {
@@ -839,7 +927,7 @@ void writer_warp(queue<uint64_t>& mq, decompress_output<WRITE_COL_LEN, CHUNK_SIZ
                 uint64_t offset = (vv>>1) & 0x0000ffff;
                 out.col_memcpy(f-1, (uint32_t)len, (uint32_t)offset);
                 //if(threadIdx.x == 0) printf("len: %llu offset: %llu\n", len, offset );
-                
+                //atomicAdd((unsigned long long int*) &(histo_ptr[len]), (unsigned long long int)1);
             }
             //literal
             else{
@@ -861,15 +949,17 @@ void writer_warp(queue<uint64_t>& mq, decompress_output<WRITE_COL_LEN, CHUNK_SIZ
 
 template <typename READ_COL_TYPE, size_t WRITE_COL_LEN = 512, size_t CHUNK_SIZE = 8192>
 __global__ void 
-__launch_bounds__(96, 15) 
-inflate(uint8_t* comp_ptr, uint64_t* col_len_ptr, uint64_t* blk_offset_ptr, uint8_t*out) {
-    __shared__ READ_COL_TYPE in_queue_[32][16];
+__launch_bounds__(96, 12) 
+inflate(uint8_t* comp_ptr, uint64_t* col_len_ptr, uint64_t* blk_offset_ptr, uint8_t*out, uint64_t* histo_ptr, uint64_t* tree_histo_ptr, dynamic_huffman* huff_tree_ptr, int32_t* d_lencnt) {
+    __shared__ READ_COL_TYPE in_queue_[32][8];
     __shared__ simt::atomic<uint32_t,simt::thread_scope_block> h[32];
     __shared__ simt::atomic<uint32_t,simt::thread_scope_block> t[32];
 
 
+
+
     int lane_id = threadIdx.x % 32;
-    queue<READ_COL_TYPE> in_queue(in_queue_[lane_id], &h[lane_id], &t[lane_id], 16);
+    queue<READ_COL_TYPE> in_queue(in_queue_[lane_id], &h[lane_id], &t[lane_id], 8);
 
     __shared__ uint64_t out_queue_[32][4];
     __shared__ simt::atomic<uint32_t,simt::thread_scope_block> out_h[32];
@@ -891,22 +981,20 @@ inflate(uint8_t* comp_ptr, uint64_t* col_len_ptr, uint64_t* blk_offset_ptr, uint
     if (is_reader_warp) {
         uint64_t blk_off = blk_offset_ptr[blockIdx.x];
 
-
         uint8_t* chunk_ptr = &(comp_ptr[blk_off]);
         decompress_input<READ_COL_TYPE> d(chunk_ptr, col_len);
         reader_warp<READ_COL_TYPE>(d, in_queue);
     }
 
     if (is_decoder_warp) {
-        input_stream<READ_COL_TYPE, 16> s(&in_queue, (uint32_t)col_len);
-        decoder_warp<READ_COL_TYPE>(s, out_queue, (uint32_t) col_len, out);
+        input_stream<READ_COL_TYPE, 8> s(&in_queue, (uint32_t)col_len);
+        decoder_warp<READ_COL_TYPE>(s, out_queue, (uint32_t) col_len, out, tree_histo_ptr, huff_tree_ptr, d_lencnt);
     }
 
     if (is_writer_warp) {
 
         decompress_output<WRITE_COL_LEN, CHUNK_SIZE> d(&(out[CHUNK_SIZE * blockIdx.x]));
-
-         writer_warp<WRITE_COL_LEN, CHUNK_SIZE>(out_queue,d);
+        writer_warp<WRITE_COL_LEN, CHUNK_SIZE>(out_queue, d, histo_ptr);
     }
 
 
@@ -957,6 +1045,9 @@ template <typename READ_COL_TYPE>
     uint8_t* d_in;
     uint64_t* d_col_len;
     uint64_t* d_blk_offset;
+
+    uint64_t* d_comp_histo;
+    uint64_t* d_tree_histo;
    
     cuda_err_chk(cudaMalloc(&d_in, in_n_bytes));
     cuda_err_chk(cudaMalloc(&d_col_len, sbcol_len.st_size));
@@ -965,6 +1056,11 @@ template <typename READ_COL_TYPE>
     cuda_err_chk(cudaMemcpy(d_in, in, in_n_bytes, cudaMemcpyHostToDevice));
     cuda_err_chk(cudaMemcpy(d_col_len, map_base_col_len, sbcol_len.st_size, cudaMemcpyHostToDevice));
     cuda_err_chk(cudaMemcpy(d_blk_offset, map_base_blk_off, sbblk_off.st_size, cudaMemcpyHostToDevice));
+
+    cuda_err_chk(cudaMalloc(&d_comp_histo, 256 * sizeof(d_comp_histo)));
+    cuda_err_chk(cudaMemset(d_comp_histo, 0, 256));
+    cuda_err_chk(cudaMalloc(&d_tree_histo, 2 * sizeof(d_comp_histo)));
+    cuda_err_chk(cudaMemset(d_tree_histo, 0, 2));
 
 
     const size_t chunk_size = 8192 * 8;
@@ -975,11 +1071,19 @@ template <typename READ_COL_TYPE>
     *out_n_bytes = out_bytes;
     cuda_err_chk(cudaMalloc(&d_out, out_bytes));
 
+
+    dynamic_huffman* d_tree;
+    cuda_err_chk(cudaMalloc(&d_tree, sizeof(dynamic_huffman) * 64*80*32));
+
+    int32_t* d_lencnt;
+    cuda_err_chk(cudaMalloc(&d_lencnt, sizeof(int32_t) * 64*80*32*(MAXCODES)));
+
+
     printf("start inflation\n");
 
     dim3 blockD(32,3,1);
     dim3 gridD(num_blk,1,1);
-    inflate<READ_COL_TYPE, 512, chunk_size> <<<gridD,blockD>>> (d_in, d_col_len, d_blk_offset, d_out);
+    inflate<READ_COL_TYPE, 512, chunk_size> <<<gridD,blockD>>> (d_in, d_col_len, d_blk_offset, d_out, d_comp_histo, d_tree_histo, d_tree, d_lencnt);
 
     cudaDeviceSynchronize();
     cudaError_t error = cudaGetLastError();
@@ -994,6 +1098,22 @@ template <typename READ_COL_TYPE>
 
     *out = new uint8_t[out_bytes];
     cuda_err_chk(cudaMemcpy((*out), d_out, out_bytes, cudaMemcpyDeviceToHost));
+
+    uint64_t* h_histo = new uint64_t[256];
+    uint64_t* h_tree_hist = new uint64_t[2];
+    cuda_err_chk(cudaMemcpy(h_histo, d_comp_histo, 256 * sizeof(uint64_t), cudaMemcpyDeviceToHost));
+    cuda_err_chk(cudaMemcpy(h_tree_hist, d_tree_histo, 2 * sizeof(uint64_t), cudaMemcpyDeviceToHost));
+
+
+    //historgrams
+    // printf("Compression pair histogram\n");
+    // for(int i  = 0; i < 256; i++){
+    //     printf("len: %i \t count: %llu\n", i, h_histo[i]);
+    // }
+
+    printf("huffman tree ratio\n");
+    printf("fixed huffman: %llu \t dynamic huffman: %llu\n", h_tree_hist[0], h_tree_hist[1]);
+    
 
     close(fd_col_len);
     close(fd_blk_off);
