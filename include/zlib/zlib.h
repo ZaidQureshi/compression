@@ -242,15 +242,20 @@ struct decompress_input {
 template <typename READ_COL_TYPE, size_t buff_len = 4>
 struct input_stream {
 
-    union buff {
-        READ_COL_TYPE b[buff_len];
-        uint32_t u[(sizeof(READ_COL_TYPE)* buff_len)/sizeof(uint32_t)];
-    } b;
+    // union buff {
+    //     READ_COL_TYPE b[buff_len];
+    //     uint32_t u[(sizeof(READ_COL_TYPE)* buff_len)/sizeof(uint32_t)];
+    // } b;
+    union buff{
+        READ_COL_TYPE* b;
+        uint32_t* u;
+    }b;
     uint16_t head;
     uint16_t count;
     uint16_t uint_head;
     uint16_t uint_count;
-
+    
+    
     queue<READ_COL_TYPE>* q;
     uint32_t read_bytes;
     uint32_t expected_bytes;
@@ -259,10 +264,13 @@ struct input_stream {
     uint32_t uint_bit_offset;
 
     __device__
-    input_stream(queue<READ_COL_TYPE>* q_, uint32_t eb) {
+    input_stream(queue<READ_COL_TYPE>* q_, uint32_t eb, READ_COL_TYPE* shared_b) {
+    //input_stream(queue<READ_COL_TYPE>* q_, uint32_t eb) {
 
         q = q_;
         expected_bytes = eb;
+
+        b.b = shared_b;
 
         head = 0;
 
@@ -274,7 +282,8 @@ struct input_stream {
         count = 0;
         for (; (count < buff_len) && (read_bytes < expected_bytes);
              count++, read_bytes += sizeof(READ_COL_TYPE), uint_count += sizeof(READ_COL_TYPE)/sizeof(uint32_t)) {
-            q->dequeue(b.b + count);
+             q->dequeue(b.b + count);
+             //q->dequeue(&(s_b[count]));
 
         }
     }
@@ -286,55 +295,41 @@ struct input_stream {
         //is this correct? 
         //assert(sizeof(T) >= sizeof(uint32_t));
 
-        //uint32_t out_t_n = 1 + ((sizeof(T)-1)/n);
-        uint32_t* out_uint = (uint32_t*) out;
+        //uint32_t* out_uint = (uint32_t*) out;
 
         //uint32_t out_t_uint = sizeof(T)/sizeof(uint32_t);
-        // Brian - Changed
-        // for (size_t i = 0; i < out_t_n; i++) {
-        //     out[i] = 0;
-        // }
+    
         *out = (T) 0;
         //uint32_t left = n;
-        uint32_t copied = 0;
         //uint32_t out_uint_offset = 0;
-        uint32_t a = b.u[(uint_head)];
-        uint32_t b2;
+        // uint32_t a = b.u[(uint_head)];
+        // uint32_t b2;
 
-       // do {
-            b2 = b.u[(uint_head+1)%bu_size];
+           // b2 = b.u[(uint_head+1)%bu_size];
 
-            //(b : a) >> min(uint_bit_offset, 32)
 
-            out_uint[0] = __funnelshift_rc(a, b2, uint_bit_offset);
-            copied += 32;
-            if (copied > n) {
-                uint32_t extra = copied - n;
-                out_uint[0] <<= extra;
-                out_uint[0] >>= extra;
-                copied -= extra;
+            //out_uint[0] = __funnelshift_rc(a, b2, uint_bit_offset);
+        ((uint32_t*) out)[0] = __funnelshift_rc(b.u[(uint_head)], b.u[(uint_head+1)%bu_size], uint_bit_offset);
 
+        if (32 > n) {
+            ((uint32_t*) out)[0] <<= (32 - n);
+            ((uint32_t*) out)[0] >>= (32 - n);
+        }
+
+
+        uint_bit_offset += n;
+        if (uint_bit_offset >= 32) {
+            uint_bit_offset = uint_bit_offset % 32;
+            uint_head = (uint_head+1) % bu_size;
+            if ((uint_head % (sizeof(READ_COL_TYPE)/sizeof(uint32_t))) == 0) {
+                head = (head + 1) % buff_len;
+                count--;
             }
 
+            uint_count--;
 
-            uint_bit_offset += copied;
-            if (uint_bit_offset >= 32) {
-                uint_bit_offset = uint_bit_offset % 32;
-                uint_head = (uint_head+1) % bu_size;
-                if ((uint_head % (sizeof(READ_COL_TYPE)/sizeof(uint32_t))) == 0) {
-                    head = (head + 1) % buff_len;
-                    count--;
-                }
-
-                uint_count--;
-
-            }
-           // out_uint_offset++;
-     //       a = b2;
-
-        //} while(copied < n);
-
-
+        }
+  
 
     }
     template<typename T>
@@ -343,6 +338,8 @@ struct input_stream {
 
         while ((count < buff_len) && (read_bytes < expected_bytes)) {
             q->dequeue(b.b + ((head+count) % buff_len));
+            //q->dequeue(s_b[((head+count) % buff_len)]);
+           
             count++;
             uint_count += sizeof(READ_COL_TYPE)/sizeof(uint32_t);
             read_bytes += sizeof(READ_COL_TYPE);
@@ -356,6 +353,8 @@ struct input_stream {
     void peek_n_bits(const uint32_t n, T* out) {
         while ((count < buff_len) && (read_bytes < expected_bytes)) { 
             q->dequeue(b.b + ((head+count) % buff_len));
+            //q->dequeue(s_b[((head+count) % buff_len)]);
+            
             count++;
             uint_count += sizeof(READ_COL_TYPE)/sizeof(uint32_t);
             read_bytes += sizeof(READ_COL_TYPE);
@@ -529,7 +528,7 @@ struct decompress_output {
                     read_counter = (read_counter - orig_counter) % offset + start_counter;
                 }
                 //uint8_t read_byte = 0;
-                //copy_byte(read_counter, write_counter, t_off);
+                copy_byte(read_counter, write_counter, t_off);
                 read_counter += 32;
                 write_counter += 32;
             }
@@ -583,7 +582,7 @@ struct decompress_output {
     __forceinline__ __device__
     void write_literal(uint32_t idx, uint8_t b){
         if(threadIdx.x == idx){
-          //  write_byte(counter, b,  WRITE_COL_LEN * idx);
+            write_byte(counter, b,  WRITE_COL_LEN * idx);
             counter++;
         }
     }
@@ -1206,9 +1205,9 @@ void writer_warp_8div(queue<write_queue_ele>& mq, decompress_output<WRITE_COL_LE
 
 
 
-template <typename READ_COL_TYPE, size_t in_queue_size = 4, size_t out_queue_size = 4,  size_t WRITE_COL_LEN = 512, size_t CHUNK_SIZE = 8192>
+template <typename READ_COL_TYPE, size_t in_queue_size = 4, size_t out_queue_size = 4, size_t local_queue_size = 4,  size_t WRITE_COL_LEN = 512, size_t CHUNK_SIZE = 8192>
 __global__ void 
-//__launch_bounds__ (96,15)
+//__launch_bounds__ (96,12)
 inflate(uint8_t* comp_ptr, const uint64_t* const col_len_ptr, const uint64_t* const blk_offset_ptr, uint8_t*out, uint64_t* histo_ptr, uint64_t* tree_histo_ptr, dynamic_huffman* huff_tree_ptr,
  slot_struct* d_slot_struct, const dynamic_huffman* const fixed_tree) {
     __shared__ READ_COL_TYPE in_queue_[32][in_queue_size];
@@ -1218,6 +1217,9 @@ inflate(uint8_t* comp_ptr, const uint64_t* const col_len_ptr, const uint64_t* co
     __shared__ write_queue_ele out_queue_[32][out_queue_size];
     __shared__ simt::atomic<uint32_t,simt::thread_scope_block> out_h[32];
     __shared__ simt::atomic<uint32_t,simt::thread_scope_block> out_t[32];
+
+
+    __shared__ READ_COL_TYPE local_queue[32][local_queue_size];
 
 
 
@@ -1248,7 +1250,9 @@ inflate(uint8_t* comp_ptr, const uint64_t* const col_len_ptr, const uint64_t* co
         queue<READ_COL_TYPE> in_queue(in_queue_[threadIdx.x], &h[threadIdx.x], &t[threadIdx.x], in_queue_size);
         queue<write_queue_ele> out_queue(out_queue_[threadIdx.x], &out_h[threadIdx.x], &out_t[threadIdx.x], out_queue_size);
 
-        input_stream<READ_COL_TYPE, 2> s(&in_queue, (uint32_t)col_len);
+        input_stream<READ_COL_TYPE, 2> s(&in_queue, (uint32_t)col_len, local_queue[threadIdx.x]);
+        //input_stream<READ_COL_TYPE, 2> s(&in_queue, (uint32_t)col_len);
+
         decoder_warp<READ_COL_TYPE, 2>(s, out_queue, (uint32_t) col_len, out, tree_histo_ptr, huff_tree_ptr, d_slot_struct, fixed_tree);
     }
 
@@ -1370,7 +1374,7 @@ uint16_t fix_distsym[MAXDCODES] =
 
     dim3 blockD(32,3,1);
     dim3 gridD(num_blk,1,1);
-    inflate<READ_COL_TYPE, 4, 4, 512, chunk_size> <<<gridD,blockD>>> (d_in, d_col_len, d_blk_offset, d_out, d_comp_histo, d_tree_histo, d_tree, d_slot_struct, d_f_tree);
+    inflate<READ_COL_TYPE, 4, 4, 2, 512, chunk_size> <<<gridD,blockD>>> (d_in, d_col_len, d_blk_offset, d_out, d_comp_histo, d_tree_histo, d_tree, d_slot_struct, d_f_tree);
 
     cudaDeviceSynchronize();
     cudaError_t error = cudaGetLastError();
