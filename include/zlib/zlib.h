@@ -425,21 +425,71 @@ struct decompress_output {
             out_ptr[read_counter + (read_counter/WRITE_COL_LEN) * (31*WRITE_COL_LEN) + t_off];
     }
 
+
+    __forceinline__ __device__
+    void write_2byte(uint64_t write_counter, uint16_t b, uint32_t t_off){
+       // ((uint16_t*) out_ptr) [(write_counter + (write_counter/WRITE_COL_LEN) * (31*WRITE_COL_LEN) + t_off)/2] = b;
+   
+        out_ptr[write_counter + (write_counter/WRITE_COL_LEN) * (31*WRITE_COL_LEN) + t_off] = (uint8_t)(b & 0x0FF);
+        out_ptr[(write_counter+1) + ((write_counter+1)/WRITE_COL_LEN) * (31*WRITE_COL_LEN) + t_off] = (uint8_t)((b >>8) & 0x0FF);
+        
+        // out_ptr[write_counter + (write_counter/WRITE_COL_LEN) * (31*WRITE_COL_LEN) + t_off] =  (uint8_t)((b >>8) & 0x0FF);
+        // out_ptr[(write_counter+1) + ((write_counter+1)/WRITE_COL_LEN) * (31*WRITE_COL_LEN) + t_off] = (uint8_t)(b & 0x0FF); 
+
+    }
+
+
+    __forceinline__ __device__
+    void write_4byte(uint64_t write_counter, uint32_t b, uint32_t t_off){
+        ((uint32_t*) out_ptr) [(write_counter + (write_counter/WRITE_COL_LEN) * (31*WRITE_COL_LEN) + t_off)/4] = b;
+    }
+
+    __forceinline__ __device__
+    void col_memcpy(uint32_t idx, uint32_t len, uint32_t offset) {
+      
+        //copy the meta data for the ptr
+
+
+        uint64_t orig_counter = __shfl_sync(FULL_MASK, counter, idx);
+        uint32_t t_off = WRITE_COL_LEN * idx;
+
+        uint32_t num_writes = ((len - threadIdx.x + 31) / 32);
+        
+        uint64_t start_counter =  0;
+        if(orig_counter > offset)
+            start_counter = orig_counter - offset;
+        uint64_t read_counter = start_counter + threadIdx.x;
+        uint64_t write_counter = orig_counter + threadIdx.x;
+
+        
+      
+        #pragma unroll 
+        for(int i = 0; i < num_writes; i++){
+
+            //check offset
+            if(read_counter >= orig_counter){
+                read_counter = (read_counter - orig_counter) % offset + start_counter;
+            }
+            //uint8_t read_byte = 0;
+            copy_byte(read_counter, write_counter, t_off);
+            read_counter += 32;
+            write_counter += 32;
+        }
+        
+        //set the counter
+        if(threadIdx.x == idx)
+            counter += len;
+    }
     
     template <uint32_t NUM_THREAD = 8>
     //__forceinline__ 
     __device__
-    void col_memcpy_div(uint8_t idx, uint16_t len, uint16_t offset, uint8_t div, uint32_t MASK) {
+    void col_memcpy_div_backup(uint8_t idx, uint16_t len, uint16_t offset, uint8_t div, uint32_t MASK) {
       
         uint16_t t_off = WRITE_COL_LEN * idx;
-
-
         int tid = threadIdx.x - div * NUM_THREAD;
         uint16_t orig_counter = __shfl_sync(MASK, counter, idx);
-
-
         uint8_t num_writes = ((len - tid + NUM_THREAD - 1) / NUM_THREAD);
-        
         uint16_t start_counter =  orig_counter - offset;
         //if(orig_counter > offset)
            // start_counter = orig_counter - offset;
@@ -456,8 +506,7 @@ struct decompress_output {
 
                 out_ptr[write_counter + (write_counter/WRITE_COL_LEN) * (31*WRITE_COL_LEN) + WRITE_COL_LEN * idx] =
             out_ptr[read_counter + (read_counter/WRITE_COL_LEN) * (31*WRITE_COL_LEN) + WRITE_COL_LEN * idx];
-
- 
+    
             read_counter += NUM_THREAD;
             write_counter += NUM_THREAD;
         }
@@ -469,12 +518,130 @@ struct decompress_output {
     }
 
 
+
+    template <uint32_t NUM_THREAD = 8>
+    //__forceinline__ 
+    __device__
+    void col_memcpy_div(uint8_t idx, uint16_t len, uint16_t offset, uint8_t div, uint32_t MASK) {
+      
+           
+        if(offset >= len ){
+                int tid = threadIdx.x - div * NUM_THREAD;
+                uint16_t orig_counter = __shfl_sync(MASK, counter, idx);
+                
+                uint8_t start_rem = (4 - (orig_counter % 4))  % 4; 
+                if(start_rem == 0){
+                    start_rem = min(4, len);
+                }
+
+                uint16_t num_writes = (len - start_rem + 3) / 4 + 1;
+
+                for (uint16_t i = tid; i < num_writes; i+= NUM_THREAD){
+    
+                    uint16_t read_c = 0;
+                    if(i == 0)
+                        read_c = orig_counter - offset;
+                    else
+                         read_c = orig_counter - offset + 4 * (i-1) + start_rem;
+
+                    uint32_t read1 = ((uint32_t*)out_ptr)[(read_c + (read_c/WRITE_COL_LEN) * (31*WRITE_COL_LEN) + WRITE_COL_LEN * idx) / 4];
+                    uint32_t read2 = ((uint32_t*)out_ptr)[(read_c + ((read_c+4)/WRITE_COL_LEN) * (31*WRITE_COL_LEN) + WRITE_COL_LEN * idx) / 4 + 1];
+                    uint32_t shifted_read = __funnelshift_rc(read1, read2, (read_c % 4) * 8);
+
+                    if(i == 0){
+                        uint16_t new_counter = orig_counter;
+                        if(start_rem == 4){
+                             write_4byte(new_counter, shifted_read, WRITE_COL_LEN * idx );
+
+                        }
+                        else{
+                            uint8_t start_off = start_rem;
+                            if(start_off  == 2){
+                                write_2byte(new_counter, (uint16_t)shifted_read, WRITE_COL_LEN * idx );
+                                new_counter += 2;
+                                start_off -= 2;
+                                shifted_read >>= 16;
+
+                            }
+                            else if(start_off == 3){
+
+                                write_byte(new_counter, (uint8_t) ((shifted_read >> (8 * 0)) & 0x00FF),  WRITE_COL_LEN * idx);
+                                shifted_read >>= 8;
+                                new_counter++;
+
+
+                                write_2byte(new_counter, (uint16_t)((shifted_read)), WRITE_COL_LEN * idx );
+                                new_counter += 2;
+                             
+                                start_off -= 3;
+                            }
+
+                            for(int j = 0; j < start_off; j++){
+                                write_byte(new_counter, (uint8_t) ((shifted_read >> (8 * j)) & 0x00FF),  WRITE_COL_LEN * idx);
+                                new_counter++;
+                            }
+                        }
+
+                    }
+                    else{
+                        write_4byte(orig_counter + start_rem + 4 * (i-1), shifted_read, WRITE_COL_LEN * idx );
+                    }
+
+                }
+
+                if(threadIdx.x == idx){
+                    counter += len;
+                }
+
+                return;
+                
+        }
+        //offset < len
+        else {
+
+        int tid = threadIdx.x - div * NUM_THREAD;
+        uint16_t orig_counter = __shfl_sync(MASK, counter, idx);
+
+
+        uint8_t num_writes = ((len - tid + NUM_THREAD - 1) / NUM_THREAD);
+        
+        uint16_t start_counter =  orig_counter - offset;
+        uint16_t read_counter = start_counter + tid;
+        uint16_t write_counter = orig_counter + tid;
+
+        if(read_counter >= orig_counter){
+                read_counter = (read_counter - orig_counter) % offset + start_counter;
+        }
+
+        #pragma unroll 
+        for(int i = 0; i < num_writes; i++){
+
+  
+                out_ptr[write_counter + (write_counter/WRITE_COL_LEN) * (31*WRITE_COL_LEN) + WRITE_COL_LEN * idx] =
+            out_ptr[read_counter + (read_counter/WRITE_COL_LEN) * (31*WRITE_COL_LEN) + WRITE_COL_LEN * idx];
+
+            read_counter += NUM_THREAD;
+            write_counter += NUM_THREAD;
+        }
+    
+        //set the counter
+        if(threadIdx.x == idx)
+            counter += len;
+
+        return;
+    }
+
+
+}
+
+
+
     //__forceinline__ 
     __device__
     void write_literal(uint8_t idx, uint8_t b){
         if(threadIdx.x == idx){
             out_ptr[counter + (counter/WRITE_COL_LEN) * (31*WRITE_COL_LEN) +   WRITE_COL_LEN * idx] = b;
-            counter++;
+        counter++;
         }
     }
 
@@ -502,17 +669,17 @@ void reader_warp(decompress_input<READ_COL_TYPE, COMP_COL_TYPE>& in, queue<READ_
 template <typename READ_COL_TYPE, size_t in_buff_len = 4>
 //__forceinline__
  __device__
-int16_t decode (input_stream<READ_COL_TYPE, in_buff_len>& __restrict__ s, const int16_t* const __restrict__  counts, const int16_t*  __restrict__ symbols){
+int16_t decode (input_stream<READ_COL_TYPE, in_buff_len>&  s, const int16_t* const   counts, const int16_t*   symbols){
 
 
     uint32_t next32r = 0;
     s.template peek_n_bits<uint32_t>(32, &next32r);
     next32r = __brev(next32r);
 
-
+    uint32_t sym_off = 0;
     uint32_t first = 0;
     #pragma unroll
-    for (uint8_t len = 1; len <= MAXBITS; len++) {
+    for (uint32_t len = 1; len <= MAXBITS; len++) {
         uint32_t code  = (next32r >> (32 - len)) - first;
         
         uint16_t count = counts[len];
@@ -520,9 +687,9 @@ int16_t decode (input_stream<READ_COL_TYPE, in_buff_len>& __restrict__ s, const 
     {
         uint32_t temp;
         s.template fetch_n_bits<uint32_t>(len, &temp);
-        return symbols[code];
+        return symbols[code+sym_off];
     }
-        symbols += count;  
+        sym_off += count;  
         first += count;
         first <<= 1;
     }
@@ -823,6 +990,188 @@ void decoder_warp(input_stream<READ_COL_TYPE, in_buff_len>& s,  queue<write_queu
 */
 
 template <size_t WRITE_COL_LEN = 512, size_t CHUNK_SIZE = 8192>
+__forceinline__ __device__
+void writer_warp(queue<write_queue_ele>& mq, decompress_output<WRITE_COL_LEN, CHUNK_SIZE>& out, uint64_t* histo_ptr) {
+    
+    uint32_t done = 0;
+    while (!done) {
+        bool deq = false;
+        //uint64_t v = 0;
+        write_queue_ele v;
+        mq.attempt_dequeue(&v, &deq);
+        uint32_t deq_mask = __ballot_sync(FULL_MASK, deq);
+        uint32_t deq_count = __popc(deq_mask);
+        for (size_t i = 0; i < deq_count; i++) {
+            int32_t f = __ffs(deq_mask);
+
+             uint8_t t = __shfl_sync(FULL_MASK, v.type, f-1);
+             uint32_t d = __shfl_sync(FULL_MASK, v.data, f-1);
+            //pair
+            //if(__ffsll(vv) == 1){
+            if(t == 1){
+                //uint64_t len = vv >> 17;
+                //uint64_t offset = (vv>>1) & 0x0000ffff;
+                uint64_t len = d >> 16;
+                uint64_t offset = (d) & 0x0000ffff;
+
+
+                out.col_memcpy(f-1, (uint32_t)len, (uint32_t)offset);
+                //if(threadIdx.x == 0) printf("len: %llu offset: %llu\n", len, offset );
+                atomicAdd((unsigned long long int*) &(histo_ptr[len]), (unsigned long long int)1);
+            }
+            //literal
+            else{
+                //uint8_t b = (vv >> 1) & 0x00FF;
+                uint8_t b = (d) & 0x00FF;
+
+                out.write_literal(f-1, b);
+            }
+
+            deq_mask >>= f;
+            deq_mask <<= f;
+        }
+
+        done = __ballot_sync(FULL_MASK, out.counter != out.total) == 0;
+
+    } 
+}
+
+
+template <size_t WRITE_COL_LEN = 512, size_t CHUNK_SIZE = 8192>
+__forceinline__ 
+__device__
+void writer_warp_8div(queue<write_queue_ele>& mq, decompress_output<WRITE_COL_LEN, CHUNK_SIZE>& out) {
+    int div = 0;
+    uint32_t MASK = 0;
+    if(threadIdx.x < 4){
+        MASK = MASK_8_1;
+        div = 0;
+    }
+    else if(threadIdx.x < 4*2){
+        MASK = MASK_8_2;
+        div = 1;
+    }
+    else if(threadIdx.x < 4*3){
+        MASK = MASK_8_3;
+        div = 2;
+    }
+    else if(threadIdx.x < 4*4){
+        MASK = MASK_8_4;
+        div = 3;
+    }
+    else if(threadIdx.x < 4*5){
+        MASK = MASK_8_5;
+        div = 4;
+    }
+    else if(threadIdx.x < 4*6){
+        MASK = MASK_8_6;
+        div = 5;
+    }
+    else if(threadIdx.x < 4*7){
+        MASK = MASK_8_7;
+        div = 6;
+    }
+    else{
+        MASK = MASK_8_8;
+        div = 7;
+    }
+
+
+    uint32_t done = 0;
+    while (!done) {
+
+        bool deq = false;
+        //uint64_t v = 0;
+        write_queue_ele v;
+        mq.attempt_dequeue(&v, &deq);
+        uint32_t deq_mask = __ballot_sync(MASK, deq);
+        uint32_t deq_count = __popc(deq_mask);
+
+
+        for (size_t i = 0; i < deq_count; i++) {
+            int32_t f = __ffs(deq_mask);
+            uint8_t t = __shfl_sync(MASK, v.type, f-1);
+            uint32_t d = __shfl_sync(MASK, v.data, f-1);
+
+            //pair
+            if(t == 1){
+                uint64_t len = d >> 16;
+                uint64_t offset = (d) & 0x0000ffff;
+                out.template col_memcpy_div<4>(f-1, (uint32_t)len, (uint32_t)offset, div, MASK);
+            }
+            //literal
+            else{
+                uint8_t b = (d) & 0x00FF;
+                out.write_literal(f-1, b);
+            }
+
+            deq_mask >>= f;
+            deq_mask <<= f;
+        }
+        done = __ballot_sync(MASK, out.counter != out.total) == 0;
+    } 
+
+}
+
+template <size_t WRITE_COL_LEN = 512, size_t CHUNK_SIZE = 8192>
+__forceinline__ __device__
+void writer_warp_4div(queue<write_queue_ele>& mq, decompress_output<WRITE_COL_LEN, CHUNK_SIZE>& out) {
+    int div = 0;
+    uint32_t MASK = 0;
+    if(threadIdx.x < 8){
+        MASK = MASK_4_1;
+        div = 0;
+    }
+    else if(threadIdx.x < 8*2){
+        MASK = MASK_4_2;
+        div = 1;
+    }
+    else if(threadIdx.x < 8*3){
+        MASK = MASK_4_3;
+        div = 2;
+    }
+    else{
+        MASK = MASK_4_4;
+        div = 3;
+    }
+
+
+    uint32_t done = 0;
+    while (!done) {
+
+        bool deq = false;
+        //uint64_t v = 0;
+        write_queue_ele v;
+        mq.attempt_dequeue(&v, &deq);
+        uint32_t deq_mask = __ballot_sync(MASK, deq);
+        uint32_t deq_count = __popc(deq_mask);
+
+
+        for (size_t i = 0; i < deq_count; i++) {
+            int32_t f = __ffs(deq_mask);
+            uint8_t t = __shfl_sync(MASK, v.type, f-1);
+            uint32_t d = __shfl_sync(MASK, v.data, f-1);
+
+            //pair
+            if(t == 1){
+                uint64_t len = d >> 16;
+                uint64_t offset = (d) & 0x0000ffff;
+                out.template col_memcpy_div<8>(f-1, (uint32_t)len, (uint32_t)offset, div, MASK);
+            }
+            //literal
+            else{
+                uint8_t b = (d) & 0x00FF;
+                out.write_literal(f-1, b);
+            }
+
+            deq_mask >>= f;
+            deq_mask <<= f;
+        }
+        done = __ballot_sync(MASK, out.counter != out.total) == 0;
+    } 
+}
+
+template <size_t WRITE_COL_LEN = 512, size_t CHUNK_SIZE = 8192>
 //__forceinline__ 
 __device__
 void writer_warp_8div_warp2(queue<write_queue_ele>& mq, decompress_output<WRITE_COL_LEN, CHUNK_SIZE>& out, int division) {
@@ -888,8 +1237,9 @@ void writer_warp_8div_warp2(queue<write_queue_ele>& mq, decompress_output<WRITE_
             }
             //literal
             else{
+
                 out.write_literal(f-1, (uint8_t)((d) & 0x00FF));
-               
+
             }
 
             deq_mask >>= f;
@@ -910,7 +1260,7 @@ __global__ void
 //__launch_bounds__ (96, 13)
 //__launch_bounds__ (128, 12)
 inflate(uint8_t* comp_ptr, const uint64_t* const col_len_ptr, const uint64_t* const blk_offset_ptr, uint8_t*out, dynamic_huffman* huff_tree_ptr,
- slot_struct* d_slot_struct, const fix_huffman* const fixed_tree) {
+ slot_struct* d_slot_struct, const fix_huffman* const fixed_tree, uint64_t* d_comp_histo) {
     __shared__ READ_COL_TYPE in_queue_[32][in_queue_size];
     __shared__ simt::atomic<uint8_t,simt::thread_scope_block> h[32];
     __shared__ simt::atomic<uint8_t,simt::thread_scope_block> t[32];
@@ -962,6 +1312,9 @@ inflate(uint8_t* comp_ptr, const uint64_t* const col_len_ptr, const uint64_t* co
         queue<write_queue_ele> out_queue(out_queue_[threadIdx.x], out_h + threadIdx.x, out_t + threadIdx.x, out_queue_size);
         decompress_output<WRITE_COL_LEN, CHUNK_SIZE> d((out + CHUNK_SIZE * blockIdx.x));
         writer_warp_8div_warp2<WRITE_COL_LEN, CHUNK_SIZE>(out_queue, d, threadIdx.y - 2);
+        //writer_warp_8div<WRITE_COL_LEN, CHUNK_SIZE>(out_queue, d);
+        //writer_warp<WRITE_COL_LEN, CHUNK_SIZE>(out_queue, d, d_comp_histo);
+
 
     }
 
@@ -982,7 +1335,7 @@ template <typename READ_COL_TYPE>
 
     printf("num blk: %llu\n", num_blk);
     printf("READ_COL_TYPE size: %llu\n", (unsigned long) sizeof(READ_COL_TYPE));
-    cudaSetDevice(1);
+    cudaSetDevice(0);
     uint8_t* d_in;
     uint64_t* d_col_len;
     uint64_t* d_blk_offset;
@@ -1027,7 +1380,7 @@ template <typename READ_COL_TYPE>
     { 256,257,258,259,260,261,262,263,264,265,266,267,268,269,270,271,272,273,274,275,276,277,278,279,
         0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,
         36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,
-        9,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,96,97,98,99,100,101,
+        69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,96,97,98,99,100,101,
         102,103,104,105,106,107,108,109,110,111,112,113,114,115,116,117,118,119,120,121,122,123,124,125,126,
         127,128,129,130,131,132,133,134,135,136,137,138,139,140,141,142,143,280,281,282,283,284,285,286,287,
         144,145,146,147,148,149,150,151,152,153,154,155,156,157,158,159,160,161,162,163,164,165,166,167,168,
@@ -1063,7 +1416,7 @@ template <typename READ_COL_TYPE>
 
     std::chrono::high_resolution_clock::time_point kernel_start = std::chrono::high_resolution_clock::now();
 
-    inflate<uint64_t, READ_COL_TYPE, 4 , 4, 2, 512, chunk_size> <<<gridD,blockD>>> (d_in, d_col_len, d_blk_offset, d_out, d_tree, d_slot_struct, d_f_tree);
+    inflate<uint64_t, READ_COL_TYPE, 4 , 4, 2, 512, chunk_size> <<<gridD,blockD>>> (d_in, d_col_len, d_blk_offset, d_out, d_tree, d_slot_struct, d_f_tree, d_comp_histo);
     cuda_err_chk(cudaDeviceSynchronize());
     std::chrono::high_resolution_clock::time_point kernel_end = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> total = std::chrono::duration_cast<std::chrono::duration<double>>(kernel_end - kernel_start);
@@ -1089,10 +1442,11 @@ template <typename READ_COL_TYPE>
     cuda_err_chk(cudaMemcpy(h_tree_hist, d_tree_histo, 2 * sizeof(uint64_t), cudaMemcpyDeviceToHost));
 
 
-    //historgrams
+    // //historgrams
     // printf("Compression pair histogram\n");
     // for(int i  = 0; i < 256; i++){
-    //     printf("len: %i \t count: %llu\n", i, h_histo[i]);
+    //     //printf("len: %i \t count: %llu\n", i, h_histo[i]);
+    //     printf("%llu\n", h_histo[i]);
     // }
 
     printf("huffman tree ratio\n");
@@ -1105,6 +1459,7 @@ template <typename READ_COL_TYPE>
     cuda_err_chk(cudaFree(d_in));
     cuda_err_chk(cudaFree(d_col_len));
     cuda_err_chk(cudaFree(d_blk_offset));
+    cuda_err_chk(cudaFree(d_comp_histo));
  }
 
 
