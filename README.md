@@ -29,7 +29,7 @@ mv column_data.bin ./data/column_data.bin
 ```
 
 8. Run the compressor to compress in the right format. Currently we use python zlib libaray which might take upto 30 mintues for ~3GB datasets.
-`python compressor.py
+`python compressor.py`
 
 9. Run the decompressor
 `
