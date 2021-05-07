@@ -34,3 +34,4 @@ mv column_data.bin ./data/column_data.bin
 9. Run the decompressor
 `
 ./build/exe/src/zlib/zlib.cu.exe -d ./output/compressed_file.bin decompressed_file.bin ./output/col_len.bin ./output/blk_offset.bin`
+"decompressed_file.bin" is the output decompressed file.
