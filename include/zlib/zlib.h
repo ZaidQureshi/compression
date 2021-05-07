@@ -1956,9 +1956,9 @@ inflate(uint8_t* comp_ptr, const uint64_t* const col_len_ptr, const uint64_t* co
     else {
         queue<write_queue_ele> out_queue(out_queue_[threadIdx.x], out_h + threadIdx.x, out_t + threadIdx.x, out_queue_size);
         decompress_output<WRITE_COL_LEN, CHUNK_SIZE> d((out + CHUNK_SIZE * blockIdx.x));
-        //writer_warp_8div_warp2<WRITE_COL_LEN, CHUNK_SIZE>(out_queue, d, threadIdx.y - 2);
+        writer_warp_8div_warp2<WRITE_COL_LEN, CHUNK_SIZE>(out_queue, d, threadIdx.y - 2);
   
-        writer_warp_8div<WRITE_COL_LEN, CHUNK_SIZE>(out_queue, d);
+        //writer_warp_8div<WRITE_COL_LEN, CHUNK_SIZE>(out_queue, d);
         //writer_warp<WRITE_COL_LEN, CHUNK_SIZE>(out_queue, d, d_comp_histo);
 
 
@@ -2003,7 +2003,7 @@ template <typename READ_COL_TYPE>
     cuda_err_chk(cudaMemset(d_tree_histo, 0, 2));
 
 
-    const size_t chunk_size = 8192 * 8 * 8;
+    const size_t chunk_size = 8192 * 8;
     uint64_t out_bytes = chunk_size * num_blk;
     printf("out_bytes: %llu\n", out_bytes);
 
@@ -2056,7 +2056,7 @@ template <typename READ_COL_TYPE>
 
     printf("start inflation\n");
 
-    dim3 blockD(32,3,1);
+    dim3 blockD(32,4,1);
     dim3 gridD(num_blk,1,1);
     cudaDeviceSynchronize();
 

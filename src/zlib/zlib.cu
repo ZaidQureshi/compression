@@ -12,13 +12,13 @@
 #include <chrono>
 
 int main(int argc, char** argv) {
-    if (argc < 7) {
+    if (argc < 5) {
       std::cerr << "Please provide arguments input output input_bytes read_bytes \n";
       exit(1);
     }
 
     bool decomp = (strcmp(argv[1],"-d")==0);
-    if (decomp && (argc < 8)) {
+    if (decomp && (argc < 6)) {
       std::cerr << "Please provide arguments -d input output  col_len blk_offset input_bytes read_bytes \n";
       exit(1);
     }
@@ -27,11 +27,11 @@ int main(int argc, char** argv) {
     const char* output = decomp ? argv[3] : argv[2];
     const char* col_f = decomp ? argv[4] : argv[3];
     const char* blk_f = decomp ? argv[5] : argv[4];
-    const char* s_input_bytes = decomp ? argv[6] : argv[5];
-    const char* s_read_bytes = decomp ? argv[7] : argv[6];
+   // const char* s_input_bytes = decomp ? argv[6] : argv[5];
+   // const char* s_read_bytes = decomp ? argv[7] : argv[6];
 
-    int input_bytes = std::atoi(s_input_bytes);
-    int read_bytes = std::atoi(s_read_bytes);
+   // int input_bytes = std::atoi(s_input_bytes);
+   // int read_bytes = std::atoi(s_read_bytes);
 
     std::chrono::high_resolution_clock::time_point total_start = std::chrono::high_resolution_clock::now();
     int in_fd;
