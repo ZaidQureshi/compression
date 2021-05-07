@@ -37,6 +37,13 @@
 #define MAXDCODES 30
 #define MAXCODES 316
 
+__device__
+ uint32_t round_4(uint32_t a){
+
+        if( a % 4 == 0)
+            return a + 4;
+        return ((a + 3)/4)*4;
+    } 
 
 
 __constant__ int32_t fixed_lengths[FIXLCODES];
@@ -481,52 +488,12 @@ struct decompress_output {
             counter += len;
     }
     
-    template <uint32_t NUM_THREAD = 8>
+
+     template <uint32_t NUM_THREAD = 8>
     //__forceinline__ 
     __device__
-    void col_memcpy_div_backup(uint8_t idx, uint16_t len, uint16_t offset, uint8_t div, uint32_t MASK) {
-      
-        uint16_t t_off = WRITE_COL_LEN * idx;
-        int tid = threadIdx.x - div * NUM_THREAD;
-        uint16_t orig_counter = __shfl_sync(MASK, counter, idx);
-        uint8_t num_writes = ((len - tid + NUM_THREAD - 1) / NUM_THREAD);
-        uint16_t start_counter =  orig_counter - offset;
-        //if(orig_counter > offset)
-           // start_counter = orig_counter - offset;
-        uint16_t read_counter = start_counter + tid;
-        uint16_t write_counter = orig_counter + tid;
-
-        if(read_counter >= orig_counter){
-                read_counter = (read_counter - orig_counter) % offset + start_counter;
-        }
-
-        #pragma unroll 
-        for(int i = 0; i < num_writes; i++){
-
-
-                out_ptr[write_counter + (write_counter/WRITE_COL_LEN) * (31*WRITE_COL_LEN) + WRITE_COL_LEN * idx] =
-            out_ptr[read_counter + (read_counter/WRITE_COL_LEN) * (31*WRITE_COL_LEN) + WRITE_COL_LEN * idx];
-    
-            read_counter += NUM_THREAD;
-            write_counter += NUM_THREAD;
-        }
-    
-        //set the counter
-        if(threadIdx.x == idx)
-            counter += len;
-
-    }
-
-
-
-    template <uint32_t NUM_THREAD = 8>
-    //__forceinline__ 
-    __device__
-    void col_memcpy_div(uint8_t idx, uint16_t len, uint16_t offset, uint8_t div, uint32_t MASK) {
-      
-           
-        if(offset >= len ){
-                int tid = threadIdx.x - div * NUM_THREAD;
+    void col_memcpy_div_fast(uint8_t idx, uint16_t len, uint16_t offset, uint8_t div, uint32_t MASK){
+          int tid = threadIdx.x - div * NUM_THREAD;
                 uint16_t orig_counter = __shfl_sync(MASK, counter, idx);
                 
                 uint8_t start_rem = (4 - (orig_counter % 4))  % 4; 
@@ -595,17 +562,21 @@ struct decompress_output {
 
                 return;
                 
-        }
-        //offset < len
-        else {
+    }
 
+
+    template <uint32_t NUM_THREAD = 8>
+    //__forceinline__ 
+    __device__
+    void col_memcpy_div_backup(uint8_t idx, uint16_t len, uint16_t offset, uint8_t div, uint32_t MASK) {
+      
+        uint16_t t_off = WRITE_COL_LEN * idx;
         int tid = threadIdx.x - div * NUM_THREAD;
         uint16_t orig_counter = __shfl_sync(MASK, counter, idx);
-
-
         uint8_t num_writes = ((len - tid + NUM_THREAD - 1) / NUM_THREAD);
-        
         uint16_t start_counter =  orig_counter - offset;
+        //if(orig_counter > offset)
+           // start_counter = orig_counter - offset;
         uint16_t read_counter = start_counter + tid;
         uint16_t write_counter = orig_counter + tid;
 
@@ -616,10 +587,10 @@ struct decompress_output {
         #pragma unroll 
         for(int i = 0; i < num_writes; i++){
 
-  
+
                 out_ptr[write_counter + (write_counter/WRITE_COL_LEN) * (31*WRITE_COL_LEN) + WRITE_COL_LEN * idx] =
             out_ptr[read_counter + (read_counter/WRITE_COL_LEN) * (31*WRITE_COL_LEN) + WRITE_COL_LEN * idx];
-
+	
             read_counter += NUM_THREAD;
             write_counter += NUM_THREAD;
         }
@@ -628,11 +599,664 @@ struct decompress_output {
         if(threadIdx.x == idx)
             counter += len;
 
-        return;
     }
 
 
-}
+   
+
+
+    template <uint32_t NUM_THREAD = 8>
+    //__forceinline__ 
+    __device__
+    void col_memcpy_div(uint8_t idx, uint16_t len, uint16_t offset, uint8_t div, uint32_t MASK) {
+        //bool test = false;
+
+        uint16_t cur_counter = __shfl_sync(MASK, counter, idx);
+
+        int tid = threadIdx.x - div * NUM_THREAD;
+        uint16_t orig_counter = __shfl_sync(MASK, counter, idx);
+        uint16_t start_position = orig_counter - offset;
+        uint16_t start_aligned_position = ((start_position + 3)/4) * 4;
+        uint16_t new_len = len;
+
+        if(threadIdx.x == idx){
+            for(;start_position < start_aligned_position; start_position++){
+                copy_byte(start_position, counter, WRITE_COL_LEN * idx);
+                counter++;
+                orig_counter++;
+                new_len --;
+            }
+        }
+
+        orig_counter = __shfl_sync(MASK, counter, idx);
+        new_len = __shfl_sync(MASK, new_len, idx);
+        start_position = __shfl_sync(MASK, start_position, idx);
+            
+
+        uint8_t start_rem = (4 - (orig_counter % 4))  % 4; 
+        if(start_rem == 0){
+            start_rem = min(4, new_len);
+        }
+        
+
+        uint16_t num_writes = (new_len - start_rem + 3) / 4 + 1;
+        uint16_t start_num_bytes = 4 - (orig_counter - offset) % 4;
+
+        // if(threadIdx.x == idx && test) printf("start rem: %llu\n",(uint64_t) start_rem );
+        // if(threadIdx.x == idx && test) printf("start_num_bytes: %llu\n",(uint64_t) start_num_bytes );
+        // if(threadIdx.x == idx && test) printf("num_writes: %llu\n",(uint64_t) num_writes);
+        // if(threadIdx.x == idx && test) printf("orig_counter: %llu\n",(uint64_t) orig_counter );
+        // if(threadIdx.x == idx && test) printf("start_position: %llu\n",(uint64_t) start_position );
+        // if(threadIdx.x == idx && test) printf("test: %llu\n",(uint64_t) (0%offset) );
+
+        uint32_t repeat_4byte1 = 0;
+        uint32_t repeat_4byte2 = 0;
+
+        if(offset < 4 && threadIdx.x == idx){
+            repeat_4byte1 = ((uint32_t*)out_ptr)[(start_position + (start_position/WRITE_COL_LEN) * (31*WRITE_COL_LEN) + WRITE_COL_LEN * idx) / 4];
+            if(offset == 1){
+                uint32_t b = repeat_4byte1 & 0x0FF;
+                repeat_4byte1 = (b | (b << 8) | (b << 16) | (b << 24));
+                repeat_4byte2 = repeat_4byte1;
+
+            }
+            else if (offset == 2){
+                uint32_t b = repeat_4byte1 & 0x0FFFF;
+                repeat_4byte1 = (b  | (b << 16));
+                repeat_4byte2 = repeat_4byte1;
+            }
+
+            else if (offset == 3){
+                uint32_t b = repeat_4byte1 & 0x0FF;
+                repeat_4byte1 = (repeat_4byte1 & 0x00FFFFFF) | (b << 24);
+                repeat_4byte2 = (repeat_4byte1 >> 8);
+            }
+
+
+            //if(threadIdx.x == idx && test) printf("repeat_4byte1: %lx\n", (uint64_t)repeat_4byte1);
+            //if(threadIdx.x == idx && test) printf("repeat_4byte2: %lx\n", (uint64_t)repeat_4byte2);
+            //if(threadIdx.x == idx && test) printf("new_repeat: %lx\n", (uint64_t)new_repeat);
+
+
+        }
+
+        repeat_4byte1 = __shfl_sync(MASK, repeat_4byte1, idx);
+        repeat_4byte2 = __shfl_sync(MASK, repeat_4byte2, idx);
+
+        for (uint16_t i = tid; i < num_writes; i+= NUM_THREAD){
+
+            uint16_t test_i = 2;
+            uint16_t read_c = 0;
+
+            if(i == 0)
+                read_c = orig_counter - offset;
+            else
+                read_c = orig_counter - offset + 4 * (i-1) + start_rem;
+
+
+            if(read_c >= orig_counter)
+                read_c = ((read_c - orig_counter) % offset) + start_position;
+       
+
+            
+
+
+            uint32_t read1 = 0;
+            uint16_t read1_available_bytes = 0;
+            uint32_t read2 = 0;
+            uint16_t read2_available_bytes = 0;
+            uint32_t shifted_read = 0;
+
+            if( round_4(read_c) >= orig_counter){
+
+                read1_available_bytes = orig_counter - read_c;
+                read1 = ((uint32_t*)out_ptr)[(read_c + (read_c/WRITE_COL_LEN) * (31*WRITE_COL_LEN) + WRITE_COL_LEN * idx) / 4];
+                read1 >>= 8 * ((read_c % 4));
+
+                read1 <<= (4 - read1_available_bytes) * 8;
+
+                read_c = start_position;
+            }
+            else if(read_c < start_aligned_position ){
+
+
+                read1_available_bytes = start_num_bytes;
+                read1 = ((uint32_t*)out_ptr)[(read_c + (read_c/WRITE_COL_LEN) * (31*WRITE_COL_LEN) + WRITE_COL_LEN * idx) / 4];
+                read_c += start_num_bytes;
+            }
+
+            else{
+
+                read1_available_bytes = 4 - (read_c % 4);
+                read1 = ((uint32_t*)out_ptr)[(read_c + (read_c/WRITE_COL_LEN) * (31*WRITE_COL_LEN) + WRITE_COL_LEN * idx) / 4];
+                read_c += read1_available_bytes;
+            }
+
+            if(read_c >= orig_counter)
+                read_c = (read_c - orig_counter) % offset + start_position;
+
+
+            if(round_4(read_c) >= orig_counter){
+
+
+                read2_available_bytes = orig_counter - read_c;
+                read2 = ((uint32_t*)out_ptr)[(read_c + (read_c/WRITE_COL_LEN) * (31*WRITE_COL_LEN) + WRITE_COL_LEN * idx) / 4];
+                read2 >>= 8 * ((read_c % 4));
+                read_c = start_position;
+
+            }
+            else if(read_c < start_aligned_position){
+
+                read2_available_bytes = start_num_bytes;
+                read2 = ((uint32_t*)out_ptr)[(read_c + (read_c/WRITE_COL_LEN) * (31*WRITE_COL_LEN) + WRITE_COL_LEN * idx) / 4];
+                read2 >>= (8 * (4 - read2_available_bytes));
+                read_c += start_num_bytes;
+            }
+
+            else{
+
+                read2_available_bytes = 4;
+                read2 = ((uint32_t*)out_ptr)[(read_c + (read_c/WRITE_COL_LEN) * (31*WRITE_COL_LEN) + WRITE_COL_LEN * idx) / 4];
+                read_c += 4;
+            }
+
+
+  
+
+            //need 3rd read
+            if(read1_available_bytes + read2_available_bytes < 4){
+
+                read1 = __funnelshift_rc(read1, read2, 8 * (read2_available_bytes));
+                read1_available_bytes += read2_available_bytes;
+
+
+                if(round_4(read_c)>= orig_counter){
+
+                    read2_available_bytes = orig_counter - read_c;
+                    read2 = ((uint32_t*)out_ptr)[(read_c + (read_c/WRITE_COL_LEN) * (31*WRITE_COL_LEN) + WRITE_COL_LEN * idx) / 4];
+                    read2 <<= (8 * (4 - read2_available_bytes));
+                }
+                
+                else if(read_c < start_aligned_position){
+
+                    read2_available_bytes = start_num_bytes;
+                    read2 = ((uint32_t*)out_ptr)[(read_c + (read_c/WRITE_COL_LEN) * (31*WRITE_COL_LEN) + WRITE_COL_LEN * idx) / 4];
+                    read2 >>= (8 * (4 - read2_available_bytes));
+
+                }
+
+                else{
+
+                    read2_available_bytes = 4;
+                    read2 = ((uint32_t*)out_ptr)[(read_c + (read_c/WRITE_COL_LEN) * (31*WRITE_COL_LEN) + WRITE_COL_LEN * idx) / 4];
+                }
+
+            }
+
+
+                shifted_read = __funnelshift_rc(read1, read2, 8 * (4 - read1_available_bytes));
+                
+                if(offset < 4){
+                    uint32_t temp_read_c = 0; 
+                    if(i == 1)
+                        temp_read_c = start_rem;
+                    else if (i >= 2){
+                        temp_read_c = 4 * (i-1) + start_rem;
+
+                    }
+                    uint16_t repeat_remain = (temp_read_c % offset);
+                    shifted_read =  __funnelshift_rc(repeat_4byte1, repeat_4byte2, 8 * (repeat_remain));
+
+
+                }
+
+
+
+                // if(i == test_i && test) printf("final read1: %lx \n",  (uint64_t) read1);
+                // if(i == test_i && test) printf("final read2: %lx \n",  (uint64_t) read2);
+                // if(i == test_i && test) printf("final read1_available_bytes: %llu \n",  (uint64_t) read1_available_bytes);
+
+                // if(i == test_i && test) printf("shifted_read: %lx \n",  (uint64_t) shifted_read);
+
+                if(i == 0){
+                    uint16_t new_counter = orig_counter;
+                    if(start_rem == 4){
+                         write_4byte(new_counter, shifted_read, WRITE_COL_LEN * idx );
+                    }
+                    else{
+                        uint8_t start_off = start_rem;
+                        if(start_off  == 2){
+                            write_2byte(new_counter, (uint16_t)shifted_read, WRITE_COL_LEN * idx );
+                            new_counter += 2;
+                            start_off -= 2;
+                            shifted_read >>= 16;
+
+                        }
+                        else if(start_off == 3){
+
+                            write_byte(new_counter, (uint8_t) ((shifted_read >> (8 * 0)) & 0x00FF),  WRITE_COL_LEN * idx);
+                            shifted_read >>= 8;
+                            new_counter++;
+
+
+                            write_2byte(new_counter, (uint16_t)((shifted_read)), WRITE_COL_LEN * idx );
+                            new_counter += 2;
+                         
+                            start_off -= 3;
+                        }
+
+                        for(int j = 0; j < start_off; j++){
+                            write_byte(new_counter, (uint8_t) ((shifted_read >> (8 * j)) & 0x00FF),  WRITE_COL_LEN * idx);
+                            new_counter++;
+                        }
+                    }
+                }
+                else{
+                    write_4byte(orig_counter + start_rem + 4 * (i-1), shifted_read, WRITE_COL_LEN * idx );
+                }
+            }
+
+
+            __syncwarp(MASK);
+        
+
+            if(threadIdx.x == idx){
+                counter += new_len;
+            }
+
+            return;
+
+       
+    }
+
+
+template <uint32_t NUM_THREAD = 8>
+    //__forceinline__ 
+    __device__
+    void col_memcpy_div2(uint8_t idx, uint16_t len, uint16_t offset, uint8_t div, uint32_t MASK) {
+        //bool test = false;
+
+        uint16_t cur_counter = __shfl_sync(MASK, counter, idx);
+
+        int tid = threadIdx.x - div * NUM_THREAD;
+        uint16_t orig_counter = __shfl_sync(MASK, counter, idx);
+        uint16_t start_position = orig_counter - offset;
+        uint16_t start_aligned_position = ((start_position + 3)/4) * 4;
+        uint16_t new_len = len;
+
+
+
+
+
+        if(threadIdx.x == idx){
+            for(;start_position < start_aligned_position; start_position++){
+                copy_byte(start_position, counter, WRITE_COL_LEN * idx);
+                counter++;
+                orig_counter++;
+                new_len --;
+            }
+        }
+
+        orig_counter = __shfl_sync(MASK, counter, idx);
+        new_len = __shfl_sync(MASK, new_len, idx);
+        start_position = __shfl_sync(MASK, start_position, idx);
+            
+
+        uint8_t start_rem = (4 - (orig_counter % 4))  % 4; 
+        if(start_rem == 0){
+            start_rem = min(4, new_len);
+        }
+        
+
+        uint16_t num_writes = (new_len - start_rem + 3) / 4 + 1;
+        uint16_t start_num_bytes = 4 - (orig_counter - offset) % 4;
+
+        // if(threadIdx.x == idx && test) printf("start rem: %llu\n",(uint64_t) start_rem );
+        // if(threadIdx.x == idx && test) printf("start_num_bytes: %llu\n",(uint64_t) start_num_bytes );
+        // if(threadIdx.x == idx && test) printf("num_writes: %llu\n",(uint64_t) num_writes);
+        // if(threadIdx.x == idx && test) printf("orig_counter: %llu\n",(uint64_t) orig_counter );
+        // if(threadIdx.x == idx && test) printf("start_position: %llu\n",(uint64_t) start_position );
+        // if(threadIdx.x == idx && test) printf("test: %llu\n",(uint64_t) (0%offset) );
+
+        uint32_t repeat_4byte1 = 0;
+        uint32_t repeat_4byte2 = 0;
+
+        if(offset < 4 && threadIdx.x == idx){
+            repeat_4byte1 = ((uint32_t*)out_ptr)[(start_position + (start_position/WRITE_COL_LEN) * (31*WRITE_COL_LEN) + WRITE_COL_LEN * idx) / 4];
+            if(offset == 1){
+                uint32_t b = repeat_4byte1 & 0x0FF;
+                repeat_4byte1 = (b | (b << 8) | (b << 16) | (b << 24));
+                repeat_4byte2 = repeat_4byte1;
+
+            }
+            else if (offset == 2){
+                uint32_t b = repeat_4byte1 & 0x0FFFF;
+                repeat_4byte1 = (b  | (b << 16));
+                repeat_4byte2 = repeat_4byte1;
+            }
+
+            else if (offset == 3){
+                uint32_t b = repeat_4byte1 & 0x0FF;
+                repeat_4byte1 = (repeat_4byte1 & 0x00FFFFFF) | (b << 24);
+                repeat_4byte2 = (repeat_4byte1 >> 8);
+            }
+
+
+            //if(threadIdx.x == idx && test) printf("repeat_4byte1: %lx\n", (uint64_t)repeat_4byte1);
+            //if(threadIdx.x == idx && test) printf("repeat_4byte2: %lx\n", (uint64_t)repeat_4byte2);
+            //if(threadIdx.x == idx && test) printf("new_repeat: %lx\n", (uint64_t)new_repeat);
+
+
+        }
+
+        repeat_4byte1 = __shfl_sync(MASK, repeat_4byte1, idx);
+        repeat_4byte2 = __shfl_sync(MASK, repeat_4byte2, idx);
+
+        for (uint16_t i = tid; i < num_writes; i+= NUM_THREAD){
+
+            uint16_t test_i = 2;
+            uint16_t read_c = 0;
+
+            if(i == 0)
+                read_c = orig_counter - offset;
+            else
+                read_c = orig_counter - offset + 4 * (i-1) + start_rem;
+
+
+            if(read_c >= orig_counter)
+                read_c = ((read_c - orig_counter) % offset) + start_position;
+       
+
+            
+
+
+            uint32_t read1 = 0;
+            uint16_t read1_available_bytes = 0;
+            uint32_t read2 = 0;
+            uint16_t read2_available_bytes = 0;
+            uint32_t shifted_read = 0;
+
+
+
+            if(offset <= 3){
+
+            }
+
+            else if( round_4(read_c) >= orig_counter){
+
+                read1_available_bytes = orig_counter - read_c;
+                read1 = ((uint32_t*)out_ptr)[(read_c + (read_c/WRITE_COL_LEN) * (31*WRITE_COL_LEN) + WRITE_COL_LEN * idx) / 4];
+                read1 >>= 8 * ((read_c % 4));
+
+                read1 <<= (4 - read1_available_bytes) * 8;
+
+                read_c = start_position;
+            }
+            else if(read_c < start_aligned_position ){
+
+
+                read1_available_bytes = start_num_bytes;
+                read1 = ((uint32_t*)out_ptr)[(read_c + (read_c/WRITE_COL_LEN) * (31*WRITE_COL_LEN) + WRITE_COL_LEN * idx) / 4];
+                read_c += start_num_bytes;
+            }
+
+            else{
+
+                read1_available_bytes = 4 - (read_c % 4);
+                read1 = ((uint32_t*)out_ptr)[(read_c + (read_c/WRITE_COL_LEN) * (31*WRITE_COL_LEN) + WRITE_COL_LEN * idx) / 4];
+                read_c += read1_available_bytes;
+            }
+
+            if(read_c >= orig_counter)
+                read_c = (read_c - orig_counter) % offset + start_position;
+
+
+
+
+            if(offset <= 3){
+
+            }
+
+            else if(round_4(read_c) >= orig_counter){
+
+
+                read2_available_bytes = orig_counter - read_c;
+                read2 = ((uint32_t*)out_ptr)[(read_c + (read_c/WRITE_COL_LEN) * (31*WRITE_COL_LEN) + WRITE_COL_LEN * idx) / 4];
+                read2 >>= 8 * ((read_c % 4));
+                read_c = start_position;
+
+            }
+            else if(read_c < start_aligned_position){
+
+                read2_available_bytes = start_num_bytes;
+                read2 = ((uint32_t*)out_ptr)[(read_c + (read_c/WRITE_COL_LEN) * (31*WRITE_COL_LEN) + WRITE_COL_LEN * idx) / 4];
+                read2 >>= (8 * (4 - read2_available_bytes));
+                read_c += start_num_bytes;
+            }
+
+            else{
+
+                read2_available_bytes = 4;
+                read2 = ((uint32_t*)out_ptr)[(read_c + (read_c/WRITE_COL_LEN) * (31*WRITE_COL_LEN) + WRITE_COL_LEN * idx) / 4];
+                read_c += 4;
+            }
+
+
+      
+
+                //need 3rd read
+                if(read1_available_bytes + read2_available_bytes < 4){
+
+                    read1 = __funnelshift_rc(read1, read2, 8 * (read2_available_bytes));
+                    read1_available_bytes += read2_available_bytes;
+
+
+
+                    if(offset <= 3){
+
+                    }
+                    
+                    else if(round_4(read_c)>= orig_counter){
+
+                        read2_available_bytes = orig_counter - read_c;
+                        read2 = ((uint32_t*)out_ptr)[(read_c + (read_c/WRITE_COL_LEN) * (31*WRITE_COL_LEN) + WRITE_COL_LEN * idx) / 4];
+                        read2 <<= (8 * (4 - read2_available_bytes));
+                    }
+                    
+                    else if(read_c < start_aligned_position){
+
+                        read2_available_bytes = start_num_bytes;
+                        read2 = ((uint32_t*)out_ptr)[(read_c + (read_c/WRITE_COL_LEN) * (31*WRITE_COL_LEN) + WRITE_COL_LEN * idx) / 4];
+                        read2 >>= (8 * (4 - read2_available_bytes));
+
+                    }
+
+                    else{
+
+                        read2_available_bytes = 4;
+                        read2 = ((uint32_t*)out_ptr)[(read_c + (read_c/WRITE_COL_LEN) * (31*WRITE_COL_LEN) + WRITE_COL_LEN * idx) / 4];
+                    }
+
+                }
+
+
+                shifted_read = __funnelshift_rc(read1, read2, 8 * (4 - read1_available_bytes));
+                
+                if(offset < 4){
+                    uint32_t temp_read_c = 0; 
+                    if(i == 1)
+                        temp_read_c = start_rem;
+                    else if (i >= 2){
+                        temp_read_c = 4 * (i-1) + start_rem;
+
+                    }
+                    uint16_t repeat_remain = (temp_read_c % offset);
+                    shifted_read =  __funnelshift_rc(repeat_4byte1, repeat_4byte2, 8 * (repeat_remain));
+
+
+                }
+
+
+
+                // if(i == test_i && test) printf("final read1: %lx \n",  (uint64_t) read1);
+                // if(i == test_i && test) printf("final read2: %lx \n",  (uint64_t) read2);
+                // if(i == test_i && test) printf("final read1_available_bytes: %llu \n",  (uint64_t) read1_available_bytes);
+
+                // if(i == test_i && test) printf("shifted_read: %lx \n",  (uint64_t) shifted_read);
+
+                if(i == 0){
+                    uint16_t new_counter = orig_counter;
+                    if(start_rem == 4){
+                         write_4byte(new_counter, shifted_read, WRITE_COL_LEN * idx );
+                    }
+                    else{
+                        uint8_t start_off = start_rem;
+                        if(start_off  == 2){
+                            write_2byte(new_counter, (uint16_t)shifted_read, WRITE_COL_LEN * idx );
+                            new_counter += 2;
+                            start_off -= 2;
+                            shifted_read >>= 16;
+
+                        }
+                        else if(start_off == 3){
+
+                            write_byte(new_counter, (uint8_t) ((shifted_read >> (8 * 0)) & 0x00FF),  WRITE_COL_LEN * idx);
+                            shifted_read >>= 8;
+                            new_counter++;
+
+
+                            write_2byte(new_counter, (uint16_t)((shifted_read)), WRITE_COL_LEN * idx );
+                            new_counter += 2;
+                         
+                            start_off -= 3;
+                        }
+
+                        for(int j = 0; j < start_off; j++){
+                            write_byte(new_counter, (uint8_t) ((shifted_read >> (8 * j)) & 0x00FF),  WRITE_COL_LEN * idx);
+                            new_counter++;
+                        }
+                    }
+                }
+                else{
+                    write_4byte(orig_counter + start_rem + 4 * (i-1), shifted_read, WRITE_COL_LEN * idx );
+                }
+            }
+
+
+            __syncwarp(MASK);
+        
+
+            if(threadIdx.x == idx){
+                counter += new_len;
+            }
+
+            return;
+
+       
+    }
+
+    __device__
+    void col_memcpy_div_test(){
+
+
+       // if(threadIdx.x == 0){
+       //      counter = 10;
+       //      for(int i = 0; i < counter; i++){
+       //          out_ptr[i] = i + 1;
+       //      }
+       //  }
+
+       //  if(threadIdx.x < 4)
+       //      col_memcpy_div<4>(0, 7, 3, 0, MASK_8_1);
+
+       //  __syncwarp(MASK_8_1);
+       //  if(threadIdx.x == 0){
+       //      printf("counter:%llu\n", (uint64_t)counter );
+       //      for(int i = 0; i < counter; i++){
+       //          printf("data %d: %llu\n",  i, (uint64_t) out_ptr[i] );
+       //      }        
+       //      counter = 0;
+       //      printf("done\n");
+       //  }
+
+       //  return;
+
+
+
+        uint8_t test_out[100 + 200];
+        uint8_t test_out2[100 + 200];
+
+        //uint16_t c = 9;
+        //uint16_t l = 13;
+        //uint16_t o = 5;
+
+        for( uint16_t c = 10; c < 100; c++){
+            for( uint16_t o = 3; o < 9; o++){
+                for( uint16_t l = 1; l <= 200; l++){
+                    if(threadIdx.x == 0){
+                        counter = c;
+                        for(int i = 0; i < counter; i++){
+                            out_ptr[i] = i + 1;
+                        }
+                    }
+
+                    if(threadIdx.x < 4)
+                        col_memcpy_div<4>(0, l, o, 0, MASK_8_1);
+
+                    __syncwarp(MASK_8_1);
+
+                    uint32_t count1 = counter;
+
+                    if(threadIdx.x == 0){
+                        for(int i = 0 ; i < counter; i++){
+                            test_out[i] = out_ptr[i];
+                        }
+                    }
+
+                    if(threadIdx.x == 0){
+                        counter = c;
+                        for(int i = 0; i < counter; i++){
+                            out_ptr[i] = i + 1;
+                        }
+                    }
+
+                    if(threadIdx.x < 4)
+                        col_memcpy_div_backup<4>(0, l, o, 0, MASK_8_1);
+
+                    uint32_t count2 = counter;
+                    
+                    if(threadIdx.x == 0){
+                        for(int i = 0 ; i < counter; i++){
+                            test_out2[i] = out_ptr[i];
+                        }
+                    }
+
+                    if(threadIdx.x == 0){
+                        if(count1 != count2){
+                            printf("count different! count1: %llu count2: %llu\n", count1, count2 );
+                            return;
+                        }
+                        else{
+                            for(int i = 0 ; i < count2; i++){
+                                if(test_out[i] != test_out2[i]){
+                                    printf("value different! data1: %u data2: %u  counter: %llu len: %llu  offset: %llu\n", test_out[i], test_out2[i], (uint64_t) c, (uint64_t)l, (uint64_t)o);
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if(threadIdx.x == 0)
+            printf("good\n");
+
+        
+  
+
+
+    }
 
 
 
@@ -641,7 +1265,7 @@ struct decompress_output {
     void write_literal(uint8_t idx, uint8_t b){
         if(threadIdx.x == idx){
             out_ptr[counter + (counter/WRITE_COL_LEN) * (31*WRITE_COL_LEN) +   WRITE_COL_LEN * idx] = b;
-        counter++;
+	    counter++;
         }
     }
 
@@ -676,7 +1300,7 @@ int16_t decode (input_stream<READ_COL_TYPE, in_buff_len>&  s, const int16_t* con
     s.template peek_n_bits<uint32_t>(32, &next32r);
     next32r = __brev(next32r);
 
-    uint32_t sym_off = 0;
+	uint32_t sym_off = 0;
     uint32_t first = 0;
     #pragma unroll
     for (uint32_t len = 1; len <= MAXBITS; len++) {
@@ -687,7 +1311,7 @@ int16_t decode (input_stream<READ_COL_TYPE, in_buff_len>&  s, const int16_t* con
     {
         uint32_t temp;
         s.template fetch_n_bits<uint32_t>(len, &temp);
-        return symbols[code+sym_off];
+       	return symbols[code+sym_off];
     }
         sym_off += count;  
         first += count;
@@ -1098,6 +1722,12 @@ void writer_warp_8div(queue<write_queue_ele>& mq, decompress_output<WRITE_COL_LE
                 uint64_t len = d >> 16;
                 uint64_t offset = (d) & 0x0000ffff;
                 out.template col_memcpy_div<4>(f-1, (uint32_t)len, (uint32_t)offset, div, MASK);
+
+                // if(offset < len)
+                //     out.template col_memcpy_div<4>(f-1, (uint32_t)len, (uint32_t)offset, div, MASK);
+                // else
+                //     out.template col_memcpy_div_fast<4>(f-1, (uint32_t)len, (uint32_t)offset, div, MASK);
+
             }
             //literal
             else{
@@ -1287,6 +1917,21 @@ inflate(uint8_t* comp_ptr, const uint64_t* const col_len_ptr, const uint64_t* co
     out_h[threadIdx.x] = 0;
     out_t[threadIdx.x] = 0;
 
+    // __syncthreads();
+
+    // if(threadIdx.y == 0){
+
+    //     queue<write_queue_ele> out_queue(out_queue_[threadIdx.x], out_h + threadIdx.x, out_t + threadIdx.x, out_queue_size);
+    //     decompress_output<WRITE_COL_LEN, CHUNK_SIZE> d((out + CHUNK_SIZE * blockIdx.x));
+    //     //writer_warp_8div_warp2<WRITE_COL_LEN, CHUNK_SIZE>(out_queue, d, threadIdx.y - 2);
+       
+    //     if(blockIdx.x == 0)
+    //         d.col_memcpy_div_test();
+
+    // }
+
+    // return;
+
     __syncthreads();
 
     //reading warp: read data and put the values in the shared memory queues
@@ -1311,8 +1956,9 @@ inflate(uint8_t* comp_ptr, const uint64_t* const col_len_ptr, const uint64_t* co
     else {
         queue<write_queue_ele> out_queue(out_queue_[threadIdx.x], out_h + threadIdx.x, out_t + threadIdx.x, out_queue_size);
         decompress_output<WRITE_COL_LEN, CHUNK_SIZE> d((out + CHUNK_SIZE * blockIdx.x));
-        writer_warp_8div_warp2<WRITE_COL_LEN, CHUNK_SIZE>(out_queue, d, threadIdx.y - 2);
-        //writer_warp_8div<WRITE_COL_LEN, CHUNK_SIZE>(out_queue, d);
+        //writer_warp_8div_warp2<WRITE_COL_LEN, CHUNK_SIZE>(out_queue, d, threadIdx.y - 2);
+  
+        writer_warp_8div<WRITE_COL_LEN, CHUNK_SIZE>(out_queue, d);
         //writer_warp<WRITE_COL_LEN, CHUNK_SIZE>(out_queue, d, d_comp_histo);
 
 
@@ -1410,7 +2056,7 @@ template <typename READ_COL_TYPE>
 
     printf("start inflation\n");
 
-    dim3 blockD(32,4,1);
+    dim3 blockD(32,3,1);
     dim3 gridD(num_blk,1,1);
     cudaDeviceSynchronize();
 

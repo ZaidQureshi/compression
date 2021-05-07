@@ -90,7 +90,7 @@ int main(int argc, char** argv) {
     fstat(blk_fd, &blk_sb);
     blk = mmap(nullptr, blk_sb.st_size,  PROT_READ, MAP_PRIVATE, blk_fd, 0);
     if(blk == (void*)-1){
-        printf("Fatal Error: COL_LEN Mapping error\n");
+        printf("Fatal Error: BLK_OFF Mapping error\n");
         return -1;
     }
     uint64_t*blk_ = (uint64_t*) blk;
@@ -133,7 +133,7 @@ int main(int argc, char** argv) {
             //           std::cerr << "read bytes should be multiple of input bytes \n";
             // }
 
-            deflate::decompress_gpu<uint32_t>(in_, &out_, in_sb.st_size, &out_size, col_, col_sb.st_size, blk_, blk_sb.st_size);
+            deflate::decompress_gpu<ulonglong4>(in_, &out_, in_sb.st_size, &out_size, col_, col_sb.st_size, blk_, blk_sb.st_size);
 
 
         //brle_trans::decompress_gpu<uint8_t, uint32_t>(in_, &out_, in_sb.st_size, &out_size);
@@ -165,8 +165,9 @@ int main(int argc, char** argv) {
     std::chrono::duration<double> total = std::chrono::duration_cast<std::chrono::duration<double>>(total_end - total_start);
     std::chrono::duration<double> comp = std::chrono::duration_cast<std::chrono::duration<double>>(compress_end - compress_start);
     std::chrono::duration<double> wrt = std::chrono::duration_cast<std::chrono::duration<double>>(total_end - compress_end);
-    std::cout << "Total time: " << total.count() << " secs\n";
-    std::cout << "Compute time: " << comp.count() << " secs\n";
-    std::cout << "Write time: " << wrt.count() << " secs\n";
+	std::cout << "Done\n";
+ //    std::cout << "Total time: " << total.count() << " secs\n";
+//    std::cout << "Compute time: " << comp.count() << " secs\n";
+//    std::cout << "Write time: " << wrt.count() << " secs\n";
     
 }
