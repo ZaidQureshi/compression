@@ -14,7 +14,7 @@
 
 5. Download a dataset from https://rapidsai.github.io/demos/datasets/mortgage-data then unzip the file. There should be a file like 'mortgage/perf/Performance_2000Q1.txt'.
 
-6. Convert txt file to binary file. The arguments for the text_to_binary is in this format
+6. Convert txt file to binary file. The arguments for the text_to_binary is in this format (The current version assumes the input file size is a multiple of the chunk size. Therfore, the binary file will be padded. The chunk size is currently 64KB).
 `python text_to_binary.py <text file> <column number> <data type> <output file> '|'`
 
 ```
