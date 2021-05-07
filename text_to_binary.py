@@ -105,7 +105,6 @@ with open(str(out_fname), "ab+") as newFile:
     newFile.seek(0,2)
     file_s = newFile.tell()
     padding_s = 4096 * 2 * 8 - (file_s % (4096 * 16))
-    print ("output size: ", padding_s)
     padding_data = (0).to_bytes(padding_s, byteorder='big');
     newFile.write(padding_data) 
 
