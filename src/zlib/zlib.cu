@@ -133,7 +133,7 @@ int main(int argc, char** argv) {
             //           std::cerr << "read bytes should be multiple of input bytes \n";
             // }
 
-            deflate::decompress_gpu<uint32_t>(in_, &out_, in_sb.st_size, &out_size, col_, col_sb.st_size, blk_, blk_sb.st_size);
+            deflate::decompress_gpu<ulonglong4>(in_, &out_, in_sb.st_size, &out_size, col_, col_sb.st_size, blk_, blk_sb.st_size);
 
 
         //brle_trans::decompress_gpu<uint8_t, uint32_t>(in_, &out_, in_sb.st_size, &out_size);
@@ -161,12 +161,12 @@ int main(int argc, char** argv) {
     close(blk_fd);
 
     std::chrono::high_resolution_clock::time_point total_end = std::chrono::high_resolution_clock::now();
-
+/*
     std::chrono::duration<double> total = std::chrono::duration_cast<std::chrono::duration<double>>(total_end - total_start);
     std::chrono::duration<double> comp = std::chrono::duration_cast<std::chrono::duration<double>>(compress_end - compress_start);
     std::chrono::duration<double> wrt = std::chrono::duration_cast<std::chrono::duration<double>>(total_end - compress_end);
     std::cout << "Total time: " << total.count() << " secs\n";
     std::cout << "Compute time: " << comp.count() << " secs\n";
     std::cout << "Write time: " << wrt.count() << " secs\n";
-    
+  */  
 }
