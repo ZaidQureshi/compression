@@ -60,7 +60,7 @@ if (!should_write) {
             if (in_start + curr_read_offset >= in_start_limit) break;
             auto val = in[in_start + curr_read_offset]; curr_read_offset ++;
 #ifdef DEBUG
-// if (should_write  && cid == ERR_CHUNK && tid == ERR_THREAD) printf("thread %u read %u\n", tid, val);
+if (should_write  && cid == ERR_CHUNK && tid == ERR_THREAD) printf("thread %u read %u at offset %lu\n", tid, val, in_start + curr_read_offset);
 #endif
             if (curr_read_offset == READ_UNIT) {
                 in_start += BLK_SIZE * READ_UNIT;
@@ -121,6 +121,11 @@ if (!should_write) {
                     writeShortRepeatValues(info);
                 } else {
                     info.is_fixed_delta = true;
+#ifdef DEBUG
+if (cid == ERR_CHUNK && tid == ERR_THREAD) {
+	printf("thread %u case write delta case 4\n", tid);
+}
+#endif
                     writeDeltaValues(info);
                 }
             }
@@ -159,6 +164,11 @@ if (!should_write) {
                         && info.fix_runlen <= MAX_SHORT_REPEAT_LENGTH) {
                     writeShortRepeatValues(info);
                 } else {
+#ifdef DEBUG
+if (cid == ERR_CHUNK && tid == ERR_THREAD) {
+	printf("thread %u case write delta case 3\n", tid);
+}
+#endif
                     info.is_fixed_delta = true;
                     writeDeltaValues(info);
                 }

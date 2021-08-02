@@ -285,7 +285,7 @@ namespace rlev2 {
                                 }
                         }
 
-                        auto patch_mask = (static_cast<uint16_t>(1) << pw) - 1;
+                        auto patch_mask = (static_cast<uint32_t>(1) << pw) - 1;
                         while (pll > 0) {
                                 while (curr_pwb_left > bits_left) {
                                         if (input_buffer_count == 0) goto main_loop;

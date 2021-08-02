@@ -7,8 +7,8 @@ typedef std::conditional<sizeof(READ_TYPE) == sizeof(int32_t), int32_t, int64_t>
 typedef std::conditional<sizeof(READ_TYPE) == sizeof(int32_t), uint32_t, uint64_t>::type UINPUT_T;
 typedef std::conditional<sizeof(READ_TYPE) == sizeof(int32_t), longlong2, longlong4>::type VEC_T;
 
-#define ERR_THREAD 10
-#define ERR_CHUNK 330
+#define ERR_THREAD 16
+#define ERR_CHUNK 0
 
 // #define DEBUG
 

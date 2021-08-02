@@ -82,6 +82,9 @@ namespace rlev2 {
 					}
 					out_buffer[tid][out_buffer_ptr++] = i;
 				} else {
+#ifdef DEBUG
+if (cid == ERR_CHUNK && tid == ERR_THREAD) printf("thread %u write %u at offset %d\n", tid, i, out_8B + out_buffer_ptr - out);
+#endif
 					*(out_8B + out_buffer_ptr) = i; 
 					out_buffer_ptr ++;
 					if (out_buffer_ptr == READ_UNIT) {
@@ -106,7 +109,7 @@ namespace rlev2 {
 			};
 
 			auto read_uvarint = [&]() {
-				UINPUT_T out_int = 0;
+				uint64_t out_int = 0;
 				int offset = 0;
 				uint8_t b = 0;
 				do {
@@ -118,7 +121,12 @@ namespace rlev2 {
 			};
 
 			auto read_svarint = [&]() {
-				auto ret = static_cast<INPUT_T>(read_uvarint());
+				auto ret = static_cast<int64_t>(read_uvarint());
+#ifdef DEBUG
+if (cid == ERR_CHUNK && tid == ERR_THREAD) {
+	printf("thread %u case direct read base delta %d >>>\n", tid, ret);
+}
+#endif
 				return ret >> 1 ^ -(ret & 1);
 			};
 			
@@ -137,6 +145,11 @@ namespace rlev2 {
 					}
 				} break;
 				case HEADER_DIRECT: {
+#ifdef DEBUG
+if (cid == ERR_CHUNK && tid == ERR_THREAD) {
+	printf("thread %u case direct >>>\n", tid);
+}
+#endif
 					uint8_t encoded_fbw = (first >> 1) & 0x1f;
 					uint8_t fbw = get_decoded_bit_width(encoded_fbw);
 					uint8_t len = ((static_cast<uint16_t>(first & 0x01) << 8) | read_byte()) + 1;
@@ -162,6 +175,11 @@ namespace rlev2 {
 					}
 				} break;
 				case HEADER_DELTA: {
+#ifdef DEBUG
+if (cid == ERR_CHUNK && tid == ERR_THREAD) {
+	printf("thread %u case delta >>>\n", tid);
+}
+#endif
 					uint8_t encoded_fbw = (first >> 1) & 0x1f;
 					uint8_t fbw = get_decoded_bit_width(encoded_fbw);
 					uint8_t len = ((static_cast<uint16_t>(first & 0x01) << 8) | read_byte()) + 1;
@@ -217,17 +235,22 @@ namespace rlev2 {
 					uint8_t pgw = ((forth >> 5) & 0x07) + 1;
 					uint8_t pll = forth & 0x1f;
 
-					uint16_t patch_mask = (static_cast<uint16_t>(1) << pw) - 1;
+					uint32_t patch_mask = (static_cast<uint32_t>(1) << pw) - 1;
 
 					uint32_t base_out_ptr = out_ptr;
 
-					INPUT_T base_val = 0 ;
+					int64_t base_val = 0 ;
 					while (bw-- > 0) {
 						base_val |= ((INPUT_T)read_byte() << (bw * 8));
 					}
+#ifdef DEBUG
+if (cid == ERR_CHUNK && tid == ERR_THREAD) {
+	printf("thread %u case patched base with base val %ld\n", tid, base_val);
+}
+#endif
 					uint8_t bits_left = 0 /* bits left over from unused bits of last byte */, curr_byte = 0;
 					while (len-- > 0) {
-						UINPUT_T result = 0;
+						uint64_t result = 0;
 						uint8_t bits_to_read = fbw;
 						while (bits_to_read > bits_left) {
 							result <<= bits_left;
@@ -250,7 +273,7 @@ namespace rlev2 {
 					uint8_t cfb = get_closest_bit(pw + pgw);
 					int patch_gap = 0;
 					while (pll-- > 0) {
-						UINPUT_T result = 0;
+						uint64_t result = 0;
 						uint8_t bits_to_read = cfb;
 						while (bits_to_read > bits_left) {
 							result <<= bits_left;
@@ -265,8 +288,12 @@ namespace rlev2 {
 							bits_left -= bits_to_read;
 							result |= (curr_byte >> bits_left) & ((1 << bits_to_read) - 1);
 						}
-
 						patch_gap += (result >> pw);
+#ifdef DEBUG
+if (cid == ERR_CHUNK && tid == ERR_THREAD) {
+	printf("thread %u patch gap %d\n", tid, patch_gap);
+}
+#endif
 						uint32_t direct_out_ptr = base_out_ptr + patch_gap;
 						INPUT_T *pb_ptr = nullptr;
 						if (READ_UNIT < 4) {
@@ -288,7 +315,6 @@ namespace rlev2 {
 						*pb_ptr -= base_val;
 						*pb_ptr |= (static_cast<INPUT_T>(result & patch_mask) << fbw);
 						*pb_ptr += base_val;
-						
 					}
 				} break;
 				}

@@ -300,7 +300,6 @@ namespace rlev2 {
         }
         deltas[0] = literals[1] - literals[0]; // Initial
 
-
         // it's faster to exit under delta overflow condition without checking for
         // PATCHED_BASE condition as encoding using DIRECT is faster and has less
         // overhead than PATCHED_BASE
@@ -310,6 +309,11 @@ namespace rlev2 {
         }
 
         if (literal_min == literal_max || info.is_fixed_delta) {
+#ifdef DEBUG
+if (info.cid == ERR_CHUNK && info.tid == ERR_THREAD) {
+	printf("thread %u case write delta case 2\n", info.tid);
+}
+#endif
             writeDeltaValues(info);
             return;
         }
@@ -319,6 +323,11 @@ namespace rlev2 {
             info.delta_bits = find_closes_num_bits(max_delta);
 
             if (isIncreasing || isDecreasing) {
+#ifdef DEBUG
+if (info.cid == ERR_CHUNK && info.tid == ERR_THREAD) {
+	printf("thread %u case write delta case 1\n", info.tid);
+}
+#endif
                 writeDeltaValues(info);
                 return;
             }
@@ -424,22 +433,22 @@ namespace rlev2 {
     }
 
     __host__ __device__ 
-    void writeVulong(INPUT_T val, encode_info<>& info) {
+    void writeVulong(int64_t val, encode_info<>& info) {
         while (true) {
         if ((val & ~0x7f) == 0) {
             info.write_value(static_cast<char>(val));
             return;
         } else {
             info.write_value(static_cast<char>(0x80 | (val & 0x7f)));
-            val = (static_cast<UINPUT_T>(val) >> 7);
+            val = (static_cast<uint64_t>(val) >> 7);
             // val = (val >> 7);
         }
         }
     }
 
     __host__ __device__
-    void writeVslong(INPUT_T val, encode_info<>& info) {
-        writeVulong((val << 1) ^ (val >> (sizeof(INPUT_T) * 8 - 1)), info);
+    void writeVslong(int64_t val, encode_info<>& info) {
+        writeVulong((val << 1) ^ (val >> 63), info);
     }
 
     __host__ __device__ 
@@ -453,7 +462,14 @@ namespace rlev2 {
     __host__ __device__ 
     void writeDeltaValues(encode_info<>& info) {
         // printf("write delta\n");
-
+#ifdef DEBUG
+if (info.cid == ERR_CHUNK && info.tid == ERR_THREAD) {
+	printf("thread %u case write delta values\n", info.tid);
+    for (int i=0; i<info.num_literals-1; ++i) {
+        printf("delta[%d]: %d\n", i, info.deltas[i]);
+    }
+}
+#endif
         uint16_t len = 0;
         uint8_t encoded_width = 0;
         uint8_t num_bits = get_closest_aligned_bit(info.delta_bits);
@@ -483,9 +499,9 @@ namespace rlev2 {
         writeVulong(info.literals[0], info);
 
         writeVslong(info.deltas[0], info);
-// #ifdef DEBUG
-//         if (info.cid==ERR_CHUNK && info.tid==ERR_THREAD)printf("thread %d write initial delta %ld\n", info.tid, info.deltas[0]);
-// #endif
+#ifdef DEBUG
+        if (info.cid==ERR_CHUNK && info.tid==ERR_THREAD)printf("thread %d write initial delta %d\n", info.tid, info.deltas[0]);
+#endif
         if (!info.is_fixed_delta) {
             write_aligned_ints(info.deltas + 1, info.num_literals - 2, num_bits, info);
         }
@@ -524,9 +540,11 @@ namespace rlev2 {
             pb.literal_min |= (1LL << ((val_bytes * 8) - 1));
         }
 
+#ifdef DEBUG
 if (info.cid == ERR_CHUNK && info.tid == ERR_THREAD) {
 printf("header patched with pb %d with fbw %d \n", pb.patch_width, (get_encoded_bit_width(pb.bits95p)));
 }
+#endif
 
         const char headerThirdByte = static_cast<char>(((val_bytes - 1) << 5) | get_encoded_bit_width(pb.patch_width));
         const char headerFourthByte = static_cast<char>((pb.patch_gap_width - 1) << 5 | pb.patch_len);
