@@ -120,8 +120,8 @@ if (cid == ERR_CHUNK && tid == ERR_THREAD) printf("thread %u write %u at offset 
 				return out_int;
 			};
 
-			auto read_svarint = [&]() {
-				auto ret = static_cast<int64_t>(read_uvarint());
+			auto read_svarint = [&]() -> int64_t {
+				auto ret = read_uvarint();
 #ifdef DEBUG
 if (cid == ERR_CHUNK && tid == ERR_THREAD) {
 	printf("thread %u case direct read base delta %d >>>\n", tid, ret);
