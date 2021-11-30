@@ -24,14 +24,14 @@ bool output_check(uint8_t* a, uint64_t a_size, uint8_t* b, uint64_t b_size){
 
 
 int main(int argc, char** argv) {
-    if (argc < 7) {
-      std::cerr << "Please provide arguments input output chunk_size  read_bytes \n";
+    if (argc < 6) {
+      std::cerr << "Please provide arguments input output chunk_size  \n";
       exit(1);
     }
 
     bool decomp = (strcmp(argv[1],"-d")==0);
-    if (decomp && (argc < 8)) {
-      std::cerr << "Please provide arguments -d input output  col_len blk_offset chunk_size read_bytes \n";
+    if (decomp && (argc < 7)) {
+      std::cerr << "Please provide arguments -d input output  col_len blk_offset chunk_size \n";
       exit(1);
     }
 
@@ -40,10 +40,8 @@ int main(int argc, char** argv) {
     const char* col_f = decomp ? argv[4] : argv[3];
     const char* blk_f = decomp ? argv[5] : argv[4];
     const char* s_input_bytes = decomp ? argv[6] : argv[5];
-    const char* s_read_bytes = decomp ? argv[7] : argv[6];
 
     uint64_t chunk_size = (uint64_t)(std::atoi(s_input_bytes));
-    int cw =  std::atoi(s_read_bytes);
 
     const uint16_t col_widths[5] = {32,64,128,256,512};
 
@@ -121,13 +119,14 @@ int main(int argc, char** argv) {
 	uint64_t out_size2;
 	bool out_check = true;
 
-        if(cw == 4096){
 
 //		deflate::decompress_gpu<ulonglong4, 4096, 4>(in_, &out_, in_sb.st_size, &out_size, col_, col_sb.st_size, blk_, blk_sb.st_size, chunk_size);
 
-                deflate::decompress_gpu<uint64_t, 262144/2, 32,1,true>(in_, &out_, in_sb.st_size, &out_size, col_, col_sb.st_size, blk_, blk_sb.st_size, chunk_size);
+                deflate::decompress_gpu<uint64_t, 262144/2, 32,1,false, true>(in_, &out_, in_sb.st_size, &out_size, col_, col_sb.st_size, blk_, blk_sb.st_size, chunk_size);
 	
-	/*	
+		  deflate::decompress_gpu<uint64_t, 262144/2, 32,1, true, true>(in_, &out_, in_sb.st_size, &out_size, col_, col_sb.st_size, blk_, blk_sb.st_size, chunk_size);
+
+/*		
 		free(out_);
                 deflate::decompress_gpu<uint64_t, 262144/2, 32,2,true>(in_, &out_, in_sb.st_size, &out_size, col_, col_sb.st_size, blk_, blk_sb.st_size, chunk_size);
 		
@@ -136,14 +135,29 @@ int main(int argc, char** argv) {
 	
 		free(out_);
 		deflate::decompress_gpu<uint64_t, 262144/2, 32,8,true>(in_, &out_, in_sb.st_size, &out_size, col_, col_sb.st_size, blk_, blk_sb.st_size, chunk_size);
-	/*	
+	
 		free(out_);
-                deflate::decompress_gpu<uint64_t, 262144/2, 32,16,>(in_, &out_, in_sb.st_size, &out_size, col_, col_sb.st_size, blk_, blk_sb.st_size, chunk_size);
+                deflate::decompress_gpu<uint64_t, 262144/2, 32,16,true>(in_, &out_, in_sb.st_size, &out_size, col_, col_sb.st_size, blk_, blk_sb.st_size, chunk_size);
 
-		free(out_);
-		deflate::decompress_gpu<uint64_t, 262144/2, 32,32>(in_, &out_, in_sb.st_size, &out_size, col_, col_sb.st_size, blk_, blk_sb.st_size, chunk_size);
+
+               deflate::decompress_gpu<uint64_t, 262144/2, 32,1,false>(in_, &out_, in_sb.st_size, &out_size, col_, col_sb.st_size, blk_, blk_sb.st_size, chunk_size);
+
+
+                free(out_);
+                deflate::decompress_gpu<uint64_t, 262144/2, 32,2,false>(in_, &out_, in_sb.st_size, &out_size, col_, col_sb.st_size, blk_, blk_sb.st_size, chunk_size);
+
+                free(out_);
+                deflate::decompress_gpu<uint64_t, 262144/2, 32,4,false>(in_, &out_, in_sb.st_size, &out_size, col_, col_sb.st_size, blk_, blk_sb.st_size, chunk_size);
+
+                free(out_);
+                deflate::decompress_gpu<uint64_t, 262144/2, 32,8, false>(in_, &out_, in_sb.st_size, &out_size, col_, col_sb.st_size, blk_, blk_sb.st_size, chunk_size);
+
+                free(out_);
+                deflate::decompress_gpu<uint64_t, 262144/2, 32,16,false>(in_, &out_, in_sb.st_size, &out_size, col_, col_sb.st_size, blk_, blk_sb.st_size, chunk_size);
+
+
+*?
 *
-
 
 
 		/*
@@ -170,11 +184,6 @@ int main(int argc, char** argv) {
 
                 free(out_2);
   */
-  	}
-
-	else{
-		printf("unsupported column width\n");
-	}
 
 
 
