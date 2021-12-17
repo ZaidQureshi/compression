@@ -171,44 +171,44 @@ struct decompress_output {
    // __forceinline__ 
     __device__
     void col_memcpy_div(uint8_t idx, uint16_t len, uint16_t offset, uint8_t div, uint32_t MASK) {
-        // int tid = threadIdx.x - div * NUM_THREAD;
-        // uint32_t orig_counter = __shfl_sync(MASK, counter, idx);
+        int tid = threadIdx.x - div * NUM_THREAD;
+        uint32_t orig_counter = __shfl_sync(MASK, counter, idx);
 
-        // uint8_t num_writes = ((len - tid + NUM_THREAD - 1) / NUM_THREAD);
-        // uint32_t start_counter =  orig_counter - offset;
+        uint8_t num_writes = ((len - tid + NUM_THREAD - 1) / NUM_THREAD);
+        uint32_t start_counter =  orig_counter - offset;
 
 
-        // uint32_t read_counter = start_counter + tid;
-        // uint32_t write_counter = orig_counter + tid;
+        uint32_t read_counter = start_counter + tid;
+        uint32_t write_counter = orig_counter + tid;
 
-        // if(read_counter >= orig_counter){
-        //         read_counter = (read_counter - orig_counter) % offset + start_counter;
-        // }
+        if(read_counter >= orig_counter){
+                read_counter = (read_counter - orig_counter) % offset + start_counter;
+        }
 
-        // uint8_t num_ph =  (len +  NUM_THREAD - 1) / NUM_THREAD;
-        // //#pragma unroll 
-        // for(int i = 0; i < num_ph; i+=4){
-        //     if(i < num_writes){
-        //         out_ptr[write_counter + WRITE_COL_LEN * idx] = out_ptr[read_counter + WRITE_COL_LEN * idx];
-        //     }
-        //     if(i + 1 < num_writes){
-        //         out_ptr[write_counter + WRITE_COL_LEN * idx + NUM_THREAD * 1] = out_ptr[read_counter + WRITE_COL_LEN * idx + NUM_THREAD * 1];
-        //     }
-        //     if(i + 2 < num_writes){
-        //         out_ptr[write_counter + WRITE_COL_LEN * idx + NUM_THREAD * 2] = out_ptr[read_counter + WRITE_COL_LEN * idx + NUM_THREAD * 2];
-        //     }
-        //     if(i + 3 < num_writes){
-        //         out_ptr[write_counter + WRITE_COL_LEN * idx + NUM_THREAD * 3] = out_ptr[read_counter + WRITE_COL_LEN * idx + NUM_THREAD * 3];
-        //     }
-        //     read_counter += NUM_THREAD * 4;
-        //     write_counter += NUM_THREAD * 4;
+        uint8_t num_ph =  (len +  NUM_THREAD - 1) / NUM_THREAD;
+        //#pragma unroll 
+        for(int i = 0; i < num_ph; i+=4){
+            if(i < num_writes){
+                out_ptr[write_counter + WRITE_COL_LEN * idx] = out_ptr[read_counter + WRITE_COL_LEN * idx];
+            }
+            if(i + 1 < num_writes){
+                out_ptr[write_counter + WRITE_COL_LEN * idx + NUM_THREAD * 1] = out_ptr[read_counter + WRITE_COL_LEN * idx + NUM_THREAD * 1];
+            }
+            if(i + 2 < num_writes){
+                out_ptr[write_counter + WRITE_COL_LEN * idx + NUM_THREAD * 2] = out_ptr[read_counter + WRITE_COL_LEN * idx + NUM_THREAD * 2];
+            }
+            if(i + 3 < num_writes){
+                out_ptr[write_counter + WRITE_COL_LEN * idx + NUM_THREAD * 3] = out_ptr[read_counter + WRITE_COL_LEN * idx + NUM_THREAD * 3];
+            }
+            read_counter += NUM_THREAD * 4;
+            write_counter += NUM_THREAD * 4;
 
-        //     __syncwarp();
-        // }
+            __syncwarp();
+        }
     
-        // //set the counter
-        // if(threadIdx.x == idx)
-        //     counter += len;
+        //set the counter
+        if(threadIdx.x == idx)
+            counter += len;
         // if (len <= 32) {
         //     int tid = threadIdx.x - div * NUM_THREAD;
         //     uint32_t orig_counter = __shfl_sync(MASK, counter, idx);
@@ -240,65 +240,65 @@ struct decompress_output {
         //         counter += len;
 
         // } else {
-            int tid = threadIdx.x - div * NUM_THREAD;
-            uint32_t orig_counter = __shfl_sync(MASK, counter, idx); // This is equal to the tid's counter value upon entering the function
+            // int tid = threadIdx.x - div * NUM_THREAD;
+            // uint32_t orig_counter = __shfl_sync(MASK, counter, idx); // This is equal to the tid's counter value upon entering the function
 
-            // TODO: CHANGE
-            uint8_t num_writes = ((((len - tid * NMEMCPY) & MEMCPYLARGEMASK) + (NUM_THREAD * NMEMCPY) - 1) / (NUM_THREAD * NMEMCPY) * NMEMCPY);
-            if (((((len - tid * NMEMCPY + NMEMCPY) & MEMCPYLARGEMASK) + (NUM_THREAD * NMEMCPY) - 1) / (NUM_THREAD * NMEMCPY)) > ((((len - tid * NMEMCPY) & MEMCPYLARGEMASK) + (NUM_THREAD * NMEMCPY) - 1) / (NUM_THREAD * NMEMCPY)))
-                num_writes += (len - tid * NMEMCPY) & MEMCPYSMALLMASK;
-            if (tid * NMEMCPY > len) num_writes = 0;
-            uint32_t start_counter =  orig_counter - offset; // The place to start writing. Notice we subtract offset, not add it.
+            // // TODO: CHANGE
+            // uint8_t num_writes = ((((len - tid * NMEMCPY) & MEMCPYLARGEMASK) + (NUM_THREAD * NMEMCPY) - 1) / (NUM_THREAD * NMEMCPY) * NMEMCPY);
+            // if (((((len - tid * NMEMCPY + NMEMCPY) & MEMCPYLARGEMASK) + (NUM_THREAD * NMEMCPY) - 1) / (NUM_THREAD * NMEMCPY)) > ((((len - tid * NMEMCPY) & MEMCPYLARGEMASK) + (NUM_THREAD * NMEMCPY) - 1) / (NUM_THREAD * NMEMCPY)))
+            //     num_writes += (len - tid * NMEMCPY) & MEMCPYSMALLMASK;
+            // if (tid * NMEMCPY > len) num_writes = 0;
+            // uint32_t start_counter =  orig_counter - offset; // The place to start writing. Notice we subtract offset, not add it.
 
-            uint32_t read_counter = start_counter + tid * NMEMCPY; // Start reading from the original counter minus the offset
-            uint32_t write_counter = orig_counter + tid * NMEMCPY; // Start writing from the original counter
+            // uint32_t read_counter = start_counter + tid * NMEMCPY; // Start reading from the original counter minus the offset
+            // uint32_t write_counter = orig_counter + tid * NMEMCPY; // Start writing from the original counter
 
-            if(read_counter >= orig_counter){ // If we are reading from ahead of the place we are writing.
-                    read_counter = (read_counter - orig_counter) % offset + start_counter; // Don't really know what this line does.
-            }
+            // if(read_counter >= orig_counter){ // If we are reading from ahead of the place we are writing.
+            //         read_counter = (read_counter - orig_counter) % offset + start_counter; // Don't really know what this line does.
+            // }
 
-            uint8_t num_ph =  (len +  (NUM_THREAD * NMEMCPY) - 1) / (NUM_THREAD * NMEMCPY); // The largest amount of times a thread in the warp is writing to memory.
-            //#pragma unroll 
-            for(int i = 0; i < num_ph; i++){
-                if(num_writes - i * NMEMCPY >= NMEMCPY){ // If this thread should write. 4 bytes
-                    // TODO: CHANGE
-                    out_ptr[write_counter + WRITE_COL_LEN * idx] = out_ptr[read_counter + WRITE_COL_LEN * idx];
-                    #if NMEMCPY > 1
-                    out_ptr[write_counter + WRITE_COL_LEN * idx + 1] = out_ptr[read_counter + WRITE_COL_LEN * idx + 1];
-                    #endif
-                    #if NMEMCPY > 2
-                    out_ptr[write_counter + WRITE_COL_LEN * idx + 2] = out_ptr[read_counter + WRITE_COL_LEN * idx + 2];
-                    out_ptr[write_counter + WRITE_COL_LEN * idx + 3] = out_ptr[read_counter + WRITE_COL_LEN * idx + 3];
-                    #endif
-                    // 1 4 byte transaction | 4 1 byte transactions
-                    // char4 out_ptr[idx] = // 4 1bytes read
+            // uint8_t num_ph =  (len +  (NUM_THREAD * NMEMCPY) - 1) / (NUM_THREAD * NMEMCPY); // The largest amount of times a thread in the warp is writing to memory.
+            // //#pragma unroll 
+            // for(int i = 0; i < num_ph; i++){
+            //     if(num_writes - i * NMEMCPY >= NMEMCPY){ // If this thread should write. 4 bytes
+            //         // TODO: CHANGE
+            //         out_ptr[write_counter + WRITE_COL_LEN * idx] = out_ptr[read_counter + WRITE_COL_LEN * idx];
+            //         #if NMEMCPY > 1
+            //         out_ptr[write_counter + WRITE_COL_LEN * idx + 1] = out_ptr[read_counter + WRITE_COL_LEN * idx + 1];
+            //         #endif
+            //         #if NMEMCPY > 2
+            //         out_ptr[write_counter + WRITE_COL_LEN * idx + 2] = out_ptr[read_counter + WRITE_COL_LEN * idx + 2];
+            //         out_ptr[write_counter + WRITE_COL_LEN * idx + 3] = out_ptr[read_counter + WRITE_COL_LEN * idx + 3];
+            //         #endif
+            //         // 1 4 byte transaction | 4 1 byte transactions
+            //         // char4 out_ptr[idx] = // 4 1bytes read
 
-                    read_counter += NUM_THREAD * NMEMCPY; // Add the number of bytes that we wrote.
-                    write_counter += NUM_THREAD * NMEMCPY; // Add the number of bytes that we wrote.
-                } 
-                // #if NMEMCPY > 1
-                else if (num_writes - i * NMEMCPY > 0) { // Write however many bytes we have left.
-                    out_ptr[write_counter + WRITE_COL_LEN * idx] = out_ptr[read_counter + WRITE_COL_LEN * idx];
-                    #if NMEMCPY > 2
-                    if (num_writes - i * NMEMCPY > 1) {
-                        out_ptr[write_counter + WRITE_COL_LEN * idx + 1] = out_ptr[read_counter + WRITE_COL_LEN * idx + 1];
-                    }
-                    if (num_writes - i * NMEMCPY > 2) {
-                        out_ptr[write_counter + WRITE_COL_LEN * idx + 2] = out_ptr[read_counter + WRITE_COL_LEN * idx + 2];
-                    }
-                    #endif
-                    read_counter += NUM_THREAD * NMEMCPY; // Add the number of bytes that we wrote.
-                    write_counter += NUM_THREAD * NMEMCPY; // Add the number of bytes that we wrote.
+            //         read_counter += NUM_THREAD * NMEMCPY; // Add the number of bytes that we wrote.
+            //         write_counter += NUM_THREAD * NMEMCPY; // Add the number of bytes that we wrote.
+            //     } 
+            //     // #if NMEMCPY > 1
+            //     else if (num_writes - i * NMEMCPY > 0) { // Write however many bytes we have left.
+            //         out_ptr[write_counter + WRITE_COL_LEN * idx] = out_ptr[read_counter + WRITE_COL_LEN * idx];
+            //         #if NMEMCPY > 2
+            //         if (num_writes - i * NMEMCPY > 1) {
+            //             out_ptr[write_counter + WRITE_COL_LEN * idx + 1] = out_ptr[read_counter + WRITE_COL_LEN * idx + 1];
+            //         }
+            //         if (num_writes - i * NMEMCPY > 2) {
+            //             out_ptr[write_counter + WRITE_COL_LEN * idx + 2] = out_ptr[read_counter + WRITE_COL_LEN * idx + 2];
+            //         }
+            //         #endif
+            //         read_counter += NUM_THREAD * NMEMCPY; // Add the number of bytes that we wrote.
+            //         write_counter += NUM_THREAD * NMEMCPY; // Add the number of bytes that we wrote.
 
 
-                }
-                // #endif
-                __syncwarp(); // Synchronize.
-            }
+            //     }
+            //     // #endif
+            //     __syncwarp(); // Synchronize.
+            // }
         
-            //set the counter
-            if(threadIdx.x == idx)
-                counter += len; // Counter is by thread
+            // //set the counter
+            // if(threadIdx.x == idx)
+            //     counter += len; // Counter is by thread
         // }
 
     }
