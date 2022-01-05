@@ -120,44 +120,68 @@ int main(int argc, char** argv) {
 	bool out_check = true;
 
 
-//		deflate::decompress_gpu<ulonglong4, 4096, 4>(in_, &out_, in_sb.st_size, &out_size, col_, col_sb.st_size, blk_, blk_sb.st_size, chunk_size);
+	/*
+		printf("lookup table in device memory\n");
 
-                deflate::decompress_gpu<uint64_t, 262144/2, 32,1,false, true>(in_, &out_, in_sb.st_size, &out_size, col_, col_sb.st_size, blk_, blk_sb.st_size, chunk_size);
-	
-		  deflate::decompress_gpu<uint64_t, 262144/2, 32,1, true, true>(in_, &out_, in_sb.st_size, &out_size, col_, col_sb.st_size, blk_, blk_sb.st_size, chunk_size);
-
-/*		
-		free(out_);
-                deflate::decompress_gpu<uint64_t, 262144/2, 32,2,true>(in_, &out_, in_sb.st_size, &out_size, col_, col_sb.st_size, blk_, blk_sb.st_size, chunk_size);
-		
-		free(out_);
-		deflate::decompress_gpu<uint64_t, 262144/2, 32,4,true>(in_, &out_, in_sb.st_size, &out_size, col_, col_sb.st_size, blk_, blk_sb.st_size, chunk_size);
-	
-		free(out_);
-		deflate::decompress_gpu<uint64_t, 262144/2, 32,8,true>(in_, &out_, in_sb.st_size, &out_size, col_, col_sb.st_size, blk_, blk_sb.st_size, chunk_size);
-	
-		free(out_);
-                deflate::decompress_gpu<uint64_t, 262144/2, 32,16,true>(in_, &out_, in_sb.st_size, &out_size, col_, col_sb.st_size, blk_, blk_sb.st_size, chunk_size);
-
-
-               deflate::decompress_gpu<uint64_t, 262144/2, 32,1,false>(in_, &out_, in_sb.st_size, &out_size, col_, col_sb.st_size, blk_, blk_sb.st_size, chunk_size);
-
+	        deflate::decompress_gpu<uint64_t, 262144/2, 32,1,true, false>(in_, &out_, in_sb.st_size, &out_size, col_, col_sb.st_size, blk_, blk_sb.st_size, chunk_size);
 
                 free(out_);
-                deflate::decompress_gpu<uint64_t, 262144/2, 32,2,false>(in_, &out_, in_sb.st_size, &out_size, col_, col_sb.st_size, blk_, blk_sb.st_size, chunk_size);
+                
+		deflate::decompress_gpu<uint64_t, 262144/2, 32,2,true, false>(in_, &out_, in_sb.st_size, &out_size, col_, col_sb.st_size, blk_, blk_sb.st_size, chunk_size);
 
                 free(out_);
-                deflate::decompress_gpu<uint64_t, 262144/2, 32,4,false>(in_, &out_, in_sb.st_size, &out_size, col_, col_sb.st_size, blk_, blk_sb.st_size, chunk_size);
+                deflate::decompress_gpu<uint64_t, 262144/2, 32,4,true, false>(in_, &out_, in_sb.st_size, &out_size, col_, col_sb.st_size, blk_, blk_sb.st_size, chunk_size);
 
                 free(out_);
-                deflate::decompress_gpu<uint64_t, 262144/2, 32,8, false>(in_, &out_, in_sb.st_size, &out_size, col_, col_sb.st_size, blk_, blk_sb.st_size, chunk_size);
+                deflate::decompress_gpu<uint64_t, 262144/2, 32,8, true, false>(in_, &out_, in_sb.st_size, &out_size, col_, col_sb.st_size, blk_, blk_sb.st_size, chunk_size);
 
                 free(out_);
-                deflate::decompress_gpu<uint64_t, 262144/2, 32,16,false>(in_, &out_, in_sb.st_size, &out_size, col_, col_sb.st_size, blk_, blk_sb.st_size, chunk_size);
+                deflate::decompress_gpu<uint64_t, 262144/2, 32,16,true, false>(in_, &out_, in_sb.st_size, &out_size, col_, col_sb.st_size, blk_, blk_sb.st_size, chunk_size);
 
 
-*?
-*
+		printf("lookup table in shared memory\n");
+		free(out_);
+
+
+
+	deflate::decompress_gpu<uint64_t, 262144/2, 32,1,true, true>(in_, &out_, in_sb.st_size, &out_size, col_, col_sb.st_size, blk_, blk_sb.st_size, chunk_size);
+
+		 
+                free(out_);
+
+                deflate::decompress_gpu<uint64_t, 262144/2, 32,2,true, true>(in_, &out_, in_sb.st_size, &out_size, col_, col_sb.st_size, blk_, blk_sb.st_size, chunk_size);
+
+                free(out_);
+                deflate::decompress_gpu<uint64_t, 262144/2, 32,4,true, true>(in_, &out_, in_sb.st_size, &out_size, col_, col_sb.st_size, blk_, blk_sb.st_size, chunk_size);
+
+                free(out_);
+                deflate::decompress_gpu<uint64_t, 262144/2, 32,8, true, true>(in_, &out_, in_sb.st_size, &out_size, col_, col_sb.st_size, blk_, blk_sb.st_size, chunk_size);
+*/
+                //free(out_);
+               // deflate::decompress_gpu<uint64_t, 262144/2, 32,16,true, true>(in_, &out_, in_sb.st_size, &out_size, col_, col_sb.st_size, blk_, blk_sb.st_size, chunk_size);
+
+		printf("no lookup table && trees in shared memory\n");
+//                free(out_);
+
+
+                 deflate::decompress_gpu<uint64_t, 262144/2, 32,1,false, true>(in_, &out_, in_sb.st_size, &out_size, col_, col_sb.st_size, blk_, blk_sb.st_size, chunk_size);
+/*
+ 		 free(out_);
+
+                deflate::decompress_gpu<uint64_t, 262144/2, 32,2,false, true>(in_, &out_, in_sb.st_size, &out_size, col_, col_sb.st_size, blk_, blk_sb.st_size, chunk_size);
+
+                free(out_);
+               deflate::decompress_gpu<uint64_t, 262144/2, 32,4,false, true>(in_, &out_, in_sb.st_size, &out_size, col_, col_sb.st_size, blk_, blk_sb.st_size, chunk_size);
+
+                free(out_);
+                deflate::decompress_gpu<uint64_t, 262144/2, 32,8, false, true>(in_, &out_, in_sb.st_size, &out_size, col_, col_sb.st_size, blk_, blk_sb.st_size, chunk_size);
+
+                free(out_);
+                deflate::decompress_gpu<uint64_t, 262144/2, 32,16,false, true>(in_, &out_, in_sb.st_size, &out_size, col_, col_sb.st_size, blk_, blk_sb.st_size, chunk_size);
+	*/
+
+
+
 
 
 		/*
