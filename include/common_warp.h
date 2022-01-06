@@ -38,73 +38,203 @@
 #define MAXCODES 316
 
 
+template <typename T>
+struct volatile_queue{
+    T* queue_;
+    volatile uint8_t head;
+    volatile uint8_t tail;
+    uint8_t len;
+
+    __device__
+    volatile_queue(T* buff, volatile uint8_t h, volatile uint8_t t, const uint8_t l){
+        queue_ = buff;
+        head = h;
+        tail = t;
+        len = l;
+    }
+
+    __device__
+    void enqueue(const T* v){
+        
+        while( (tail+1) % len == head){
+            __nanosleep(100);
+        }
+        queue_[tail] = *v;
+        tail=(tail+1) % len;        
+    }
+
+    __device__
+    void dequeue(T* v){
+
+        while(head == tail){
+            __nanosleep(100);
+        }
+        *v = queue_[head];
+        head = (head + 1) % len;
+    }
+
+};
+
 
 template <typename T>
 struct queue {
     T* queue_;
     simt::atomic<uint8_t, simt::thread_scope_block>* head;
     simt::atomic<uint8_t, simt::thread_scope_block>* tail;
+    volatile uint8_t* v_head;
+    volatile uint8_t* v_tail;
+    volatile T* v_queue_;
+
     uint8_t len;
+    bool vol;
 
     __device__
-    queue(T* buff, simt::atomic<uint8_t, simt::thread_scope_block>* h, simt::atomic<uint8_t, simt::thread_scope_block>* t, const uint8_t l) {
+    queue(T* buff, simt::atomic<uint8_t, simt::thread_scope_block>* h, simt::atomic<uint8_t, simt::thread_scope_block>* t, const uint8_t l, volatile T* v_buff = NULL, volatile uint8_t* v_h = NULL, volatile uint8_t* v_t = NULL, bool v = false) {
         queue_ = buff;
         head = h;
         tail = t;
         len = l;
 
-    }
+        v_queue_ = v_buff;
+        v_head = v_h;
+        v_tail = v_t;
+        vol = v;
 
+    }
     __device__
     void enqueue(const T* v) {
 
-        const auto cur_tail = tail->load(simt::memory_order_relaxed);
-        const auto next_tail = (cur_tail + 1) % len;
+        if(vol){
+  
+            while( (*v_tail+1) % len == *v_head){
+                __nanosleep(100);
+            }
+         
+            v_queue_[*v_tail] = *v;
+            *v_tail = (*v_tail + 1) % len;    
+             
+        }
+
+        else{
+            const auto cur_tail = tail->load(simt::memory_order_relaxed);
+            const auto next_tail = (cur_tail + 1) % len;
+
+            while (next_tail == head->load(simt::memory_order_acquire))
+                __nanosleep(50);
 
 
-
-        while (next_tail == head->load(simt::memory_order_acquire))
-            __nanosleep(50);
-
-
-        queue_[cur_tail] = *v;
-        tail->store(next_tail, simt::memory_order_release);
-
-
+            queue_[cur_tail] = *v;
+            tail->store(next_tail, simt::memory_order_release);
+        }
     }
 
     __device__
     void dequeue(T* v) {
 
-        const auto cur_head = head->load(simt::memory_order_relaxed);
-        while (cur_head == tail->load(simt::memory_order_acquire))
-            __nanosleep(50);
+        if(vol){
 
-        *v = queue_[cur_head];
+            while(*v_head == *v_tail){
+                    __nanosleep(100);
+            }
+            *v = v_queue_[*v_head];
+            *v_head = (*v_head + 1) % len;
+        }
 
-        const auto next_head = (cur_head + 1) % len;
+        else{
+            const auto cur_head = head->load(simt::memory_order_relaxed);
+            while (cur_head == tail->load(simt::memory_order_acquire))
+                __nanosleep(50);
 
-        head->store(next_head, simt::memory_order_release);
+            *v = queue_[cur_head];
 
+            const auto next_head = (cur_head + 1) % len;
+
+            head->store(next_head, simt::memory_order_release);
+        }
     }
+
 
     __device__
     void attempt_dequeue(T* v, bool* p) {
-        const auto cur_head = head->load(simt::memory_order_relaxed);
-        if (cur_head == tail->load(simt::memory_order_acquire)) {
-            *p = false;
+
+        if(vol){
+            // if(threadIdx.x == 0)
+           // printf("atp deq v_head: %u v_tail: %u\n", *v_head, *v_tail);
+            
+            if(*v_head == *v_tail){
+                *p = false;
+                return;
+            }
+            *v = v_queue_[*v_head];
+            *v_head = (*v_head + 1) % len;
+
+            *p = true;
             return;
+
         }
 
+        else{
+            const auto cur_head = head->load(simt::memory_order_relaxed);
+            if (cur_head == tail->load(simt::memory_order_acquire)) {
+                *p = false;
+                return;
+            }
 
-        *v = queue_[cur_head];
-        *p = true;
 
-        const auto next_head = (cur_head + 1) % len;
+            *v = queue_[cur_head];
+            *p = true;
 
-        head->store(next_head, simt::memory_order_release);
+            const auto next_head = (cur_head + 1) % len;
 
+            head->store(next_head, simt::memory_order_release);
+        }
     }
+
+   
+     __device__
+     void warp_enqueue (T* v, uint8_t subchunk_idx, uint8_t enq_num){
+     
+        if(vol) {
+              T my_v = *v;
+               for(uint8_t i = 0; i < enq_num; i++){
+                T cur_v = __shfl_sync(FULL_MASK, my_v, i);
+                if(threadIdx.x == subchunk_idx){
+
+                    while ((*v_tail + 1) % len ==  *v_head){
+                        __nanosleep(20);
+                    }
+                    //printf("cur_v: %lx\n", cur_v);
+                     v_queue_[*v_tail] = cur_v;
+                     *v_tail = ((*v_tail) + 1) %len;
+                }
+                __syncwarp(FULL_MASK);
+
+            }
+
+        }
+        else{
+            T my_v = *v;
+
+            for(uint8_t i = 0; i < enq_num; i++){
+                T cur_v = __shfl_sync(FULL_MASK, my_v, i);
+                if(threadIdx.x == subchunk_idx){
+
+                    const auto cur_tail = tail->load(simt::memory_order_relaxed);
+                    const auto next_tail = (cur_tail + 1) % (len);
+
+                    while (next_tail ==  head->load(simt::memory_order_acquire)){
+                        __nanosleep(20);
+                    }
+                    //printf("cur_v: %lx\n", cur_v);
+                     queue_[cur_tail] = cur_v;
+                    tail->store(next_tail, simt::memory_order_release);
+                }
+                __syncwarp(FULL_MASK);
+
+            }
+        }
+    }
+
     
 };
 
