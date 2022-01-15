@@ -193,7 +193,7 @@ struct queue {
    
      __device__
      void warp_enqueue (T* v, uint8_t subchunk_idx, uint8_t enq_num){
-     
+
         if(vol) {
               T my_v = *v;
                for(uint8_t i = 0; i < enq_num; i++){
@@ -213,6 +213,7 @@ struct queue {
 
         }
         else{
+
             T my_v = *v;
 
             for(uint8_t i = 0; i < enq_num; i++){
@@ -225,9 +226,9 @@ struct queue {
                     while (next_tail ==  head->load(simt::memory_order_acquire)){
                         __nanosleep(20);
                     }
-                    //printf("cur_v: %lx\n", cur_v);
                      queue_[cur_tail] = cur_v;
                     tail->store(next_tail, simt::memory_order_release);
+
                 }
                 __syncwarp(FULL_MASK);
 
@@ -235,7 +236,33 @@ struct queue {
         }
     }
 
+    template<int NUM_THREADS = 16>
+     __device__
+     void sub_warp_enqueue (T* v, uint8_t subchunk_idx, uint8_t enq_num, uint32_t MASK, int div){
+
     
+        T my_v = *v;
+        
+        for(uint8_t i = 0; i < enq_num; i++){
+            T cur_v = __shfl_sync(MASK, my_v, i + div * 16);
+
+            if(threadIdx.x == div * 16){
+
+                const auto cur_tail = tail->load(simt::memory_order_relaxed);
+                const auto next_tail = (cur_tail + 1) % (len);
+
+                while (next_tail ==  head->load(simt::memory_order_acquire)){
+                    __nanosleep(20);
+                }
+                 queue_[cur_tail] = cur_v;
+                tail->store(next_tail, simt::memory_order_release);
+
+            }
+            __syncwarp(MASK);
+
+        }
+        
+    }
 };
 
 
@@ -275,6 +302,7 @@ __device__
 template <typename T, typename QUEUE_TYPE>
 __forceinline__ __device__
  void warp_enqueue (T* v,  queue<QUEUE_TYPE>* q, uint8_t subchunk_idx, uint8_t enq_num){
+            //printf("cur_v: %lx\n", cur_v);
 
     T my_v = *v;
 
@@ -370,20 +398,12 @@ template <typename READ_COL_TYPE, typename COMP_COL_TYPE >
 
 
         if(read){
-             uint64_t idx = src_read_bytes + threadIdx.x + src_pointer_off;
-
-            // printf("tid; %i idx: %llu\n", threadIdx.x, idx);
             *v = in.pointer[src_read_bytes + threadIdx.x + src_pointer_off];
-            //if(src_idx == 1 || blockIdx.x == 1)
-             //   printf("tid: %i v: %lx\n", threadIdx.x, (*v));
-
-        
         }
 
         uint8_t read_count = __popc(read_sync);
         
         if(threadIdx.x == src_idx){
-            //printf("rb: %llu src len: %llu v: %llu \n", (unsigned long long)  in.read_bytes, (unsigned long long) src_len, *v);
             in.read_bytes += read_count;
         }
 
@@ -393,15 +413,43 @@ template <typename READ_COL_TYPE, typename COMP_COL_TYPE >
     }
 
 
+template <typename READ_COL_TYPE, typename COMP_COL_TYPE >
+    __forceinline__
+    __device__
+    uint8_t comp_read_data_seq_sub(const uint32_t alivemask, COMP_COL_TYPE* v, decompress_input<READ_COL_TYPE, COMP_COL_TYPE>& in, uint8_t src_idx) {
+
+        uint16_t src_len = __shfl_sync(alivemask, in.len, src_idx) / sizeof(COMP_COL_TYPE);
+        uint16_t src_read_bytes = __shfl_sync(alivemask, in.read_bytes, src_idx);
+        uint64_t src_pointer_off = __shfl_sync(alivemask, in.pointer_off, src_idx);
+
+        bool read = (src_read_bytes + threadIdx.x - src_idx) < src_len;
+        uint32_t read_sync = __ballot_sync(alivemask, read);
+
+
+
+        if(read){
+            *v = in.pointer[src_read_bytes + threadIdx.x - src_idx + src_pointer_off];
+        }
+
+        uint8_t read_count = __popc(read_sync);
+        
+        if(threadIdx.x == src_idx){
+            in.read_bytes += read_count;
+        }
+
+
+
+        return read_count;
+
+
+    }
 //consumer of input queue
 template <typename READ_COL_TYPE, uint8_t buff_len = 4>
 struct input_stream {
-
-
     union buff{
         READ_COL_TYPE* b;
         uint32_t* u;
-    }b;
+    }buf;
     uint8_t head;
     uint8_t count;
     uint8_t uint_head;
@@ -422,7 +470,7 @@ struct input_stream {
         q = q_;
         expected_bytes = eb;
 
-        b.b = shared_b;
+        buf.b = shared_b;
 
         head = 0;
 
@@ -434,7 +482,7 @@ struct input_stream {
         for (; (count < buff_len) && (read_bytes < expected_bytes);
              count++, read_bytes += sizeof(READ_COL_TYPE), uint_count += sizeof(READ_COL_TYPE)/sizeof(uint32_t)) {
             // q->dequeue(b.b + count);
-            q -> dequeue(b.b + count);
+            q -> dequeue(buf.b + count);
 
         }
         }
@@ -446,7 +494,15 @@ struct input_stream {
 
         *out = (T) 0;
 
-        ((uint32_t*) out)[0] = __funnelshift_rc(b.u[(uint_head)], b.u[(uint_head+1)%bu_size], uint_bit_offset);
+        uint32_t a_val = buf.u[(uint_head)];
+        uint32_t b_val_idx = (uint_head+1);
+        b_val_idx =  b_val_idx % bu_size;
+        uint32_t b_val = buf.u[b_val_idx];
+
+        uint32_t c_val = __funnelshift_rc(a_val, b_val, uint_bit_offset);
+        ((uint32_t*) out)[0] = c_val;
+
+        //((uint32_t*) out)[0] = __funnelshift_rc(b.u[(uint_head)], b.u[(uint_head+1)%bu_size], uint_bit_offset);
 
         if (32 > n) {
             ((uint32_t*) out)[0] <<= (32 - n);
@@ -462,19 +518,17 @@ struct input_stream {
                 head = (head + 1) % buff_len;
                 count--;
             }
-
             uint_count--;
-
         }
-  
-
     }
+
+
     //T should be at least 32bits
     template<typename T>
     __device__
     void fetch_n_bits(const uint32_t n, T* out) {
         while ((count < buff_len) && (read_bytes < expected_bytes)) {
-            q -> dequeue(b.b + ((head+count) % buff_len));
+            q -> dequeue(buf.b + ((head+count) % buff_len));
            
             count++;
             uint_count += sizeof(READ_COL_TYPE)/sizeof(uint32_t);
@@ -482,6 +536,29 @@ struct input_stream {
         }
 
         get_n_bits<T>(n, out);
+    }
+
+    __device__
+    void skip_n_bits(const uint32_t n) {
+        while ((count < buff_len) && (read_bytes < expected_bytes)) {
+            q -> dequeue(buf.b + ((head+count) % buff_len));
+           
+            count++;
+            uint_count += sizeof(READ_COL_TYPE)/sizeof(uint32_t);
+            read_bytes += sizeof(READ_COL_TYPE);
+        }
+
+        uint_bit_offset += n;
+        if (uint_bit_offset >= 32) {
+            uint_bit_offset = uint_bit_offset % 32;
+            uint_head = (uint_head+1) % bu_size;
+            if ((uint_head % (sizeof(READ_COL_TYPE)/sizeof(uint32_t))) == 0) {
+                head = (head + 1) % buff_len;
+                count--;
+            }
+            uint_count--;
+        }
+
     }
 
     __device__
@@ -505,9 +582,7 @@ struct input_stream {
     __device__
     void peek_n_bits(const uint32_t n, T* out) {
         while ((count < buff_len) && (read_bytes < expected_bytes)) { 
-            //q->dequeue(b.b + ((head+count) % buff_len));
-            q -> dequeue(b.b + ((head+count) % buff_len));
-
+            q -> dequeue(buf.b + ((head+count) % buff_len));
             count++;
             uint_count += sizeof(READ_COL_TYPE)/sizeof(uint32_t);
             read_bytes += sizeof(READ_COL_TYPE);
@@ -528,9 +603,167 @@ struct input_stream {
     }
 
 
-};
+ };
+
+//consumer of input queue
+// template  <typename READ_COL_TYPE, int8_t buff_len = 4>
+// struct input_stream_test {
+   
+//     uint32_t* buf;
+
+//     uint8_t head;
+//     uint8_t count;
+//     uint8_t uint_head;
+//     uint8_t uint_count;
+    
+    
+//     queue<READ_COL_TYPE>* q;
+//     uint32_t read_bytes;
+//     uint32_t expected_bytes;
+//     uint8_t bu_size = (sizeof(READ_COL_TYPE)* buff_len)/sizeof(uint32_t);
+
+//     uint8_t uint_bit_offset;
+
+//     __device__
+//     input_stream(queue<READ_COL_TYPE>* q_, uint32_t eb, uint32_t* shared_b, bool pass) {
+//     //input_stream(queue<READ_COL_TYPE>* q_, uint32_t eb) {
+//         if(pass){
+//         q = q_;
+//         expected_bytes = eb;
+
+//         buf = shared_b;
+
+//         head = 0;
+
+//         uint_bit_offset = 0;
+//         uint_count = 0;
+//         uint_head = 0;
+//         read_bytes = 0;
+//         count = 0;
+//         for (; (count < buff_len) && (read_bytes < expected_bytes);
+//              count++, read_bytes += sizeof(READ_COL_TYPE), uint_count += sizeof(READ_COL_TYPE)/sizeof(uint32_t)) {
+//             // q->dequeue(b.b + count);
+//             q -> dequeue(buf + count);
+
+//         }
+//         }
+//     }
+
+//     template<typename T>
+//     __device__
+//     void get_n_bits(const uint32_t n, T* out) {
+
+//         *out = (T) 0;
+
+//         uint32_t a_val = buf[(uint_head)];
+//         uint32_t b_val_idx = (uint_head+1);
+//         b_val_idx =  b_val_idx % bu_size;
+//         uint32_t b_val = buf[b_val_idx];
+
+//         uint32_t c_val = __funnelshift_rc(a_val, b_val, uint_bit_offset);
+//         ((uint32_t*) out)[0] = c_val;
+
+//         //((uint32_t*) out)[0] = __funnelshift_rc(b.u[(uint_head)], b.u[(uint_head+1)%bu_size], uint_bit_offset);
+
+//         if (32 > n) {
+//             ((uint32_t*) out)[0] <<= (32 - n);
+//             ((uint32_t*) out)[0] >>= (32 - n);
+//         }
 
 
+//         uint_bit_offset += n;
+//         if (uint_bit_offset >= 32) {
+//             uint_bit_offset = uint_bit_offset % 32;
+//             uint_head = (uint_head+1) % bu_size;
+//             if ((uint_head % (sizeof(READ_COL_TYPE)/sizeof(uint32_t))) == 0) {
+//                 head = (head + 1) % buff_len;
+//                 count--;
+//             }
+//             uint_count--;
+//         }
+//     }
 
 
-//#endif // __ZLIB_H__
+//     //T should be at least 32bits
+//     template<typename T>
+//     __device__
+//     void fetch_n_bits(const uint32_t n, T* out) {
+//         while ((count < buff_len) && (read_bytes < expected_bytes)) {
+//             q -> dequeue(buf + ((head+count) % buff_len));
+           
+//             count++;
+//             uint_count += sizeof(READ_COL_TYPE)/sizeof(uint32_t);
+//             read_bytes += sizeof(READ_COL_TYPE);
+//         }
+
+//         get_n_bits<T>(n, out);
+//     }
+
+//     __device__
+//     void skip_n_bits(const uint32_t n) {
+//         while ((count < buff_len) && (read_bytes < expected_bytes)) {
+//             q -> dequeue(buf + ((head+count) % buff_len));
+           
+//             count++;
+//             uint_count += sizeof(READ_COL_TYPE)/sizeof(uint32_t);
+//             read_bytes += sizeof(READ_COL_TYPE);
+//         }
+
+//         uint_bit_offset += n;
+//         if (uint_bit_offset >= 32) {
+//             uint_bit_offset = uint_bit_offset % 32;
+//             uint_head = (uint_head+1) % bu_size;
+//             if ((uint_head % (sizeof(READ_COL_TYPE)/sizeof(uint32_t))) == 0) {
+//                 head = (head + 1) % buff_len;
+//                 count--;
+//             }
+//             uint_count--;
+//         }
+
+//     }
+
+//     __device__
+//     void align_bits(){
+//         if(uint_bit_offset % 8 != 0){
+//             uint_bit_offset = ((uint_bit_offset + 7)/8) * 8;
+//             if(uint_bit_offset == 32){
+//                 uint_bit_offset = 0;
+//                 uint_head = (uint_head+1) % bu_size;
+//                 if ((uint_head % (sizeof(READ_COL_TYPE)/sizeof(uint32_t))) == 0) {
+//                     head = (head + 1) % buff_len;
+//                     count--;
+//                 }
+//                 uint_count--;
+//             }
+//         }
+      
+//     }
+
+//     template<typename T>
+//     __device__
+//     void peek_n_bits(const uint32_t n, T* out) {
+//         while ((count < buff_len) && (read_bytes < expected_bytes)) { 
+//             q -> dequeue(buf + ((head+count) % buff_len));
+//             count++;
+//             uint_count += sizeof(READ_COL_TYPE)/sizeof(uint32_t);
+//             read_bytes += sizeof(READ_COL_TYPE);
+//         }
+//         uint8_t count_ = count;
+//         uint8_t head_ = head;
+//         uint8_t uint_count_ = uint_count;
+//         uint8_t uint_head_ = uint_head;
+//         uint8_t uint_bit_offset_ = uint_bit_offset;
+
+//         get_n_bits<T>(n, out);
+
+//         count = count_;
+//         head = head_;
+//         uint_count = uint_count_;
+//         uint_head = uint_head_;
+//         uint_bit_offset = uint_bit_offset_;
+//     }
+
+
+//};
+
+

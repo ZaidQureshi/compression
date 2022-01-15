@@ -19,6 +19,10 @@
 #define DYNAMIC 2
 #define FULL_MASK 0xFFFFFFFF
 
+#define MASK_2_1  0x0000FFFF
+#define MASK_2_2  0xFFFF0000
+
+
 #define MASK_4_1  0x000000FF
 #define MASK_4_2  0x0000FF00
 #define MASK_4_3  0x00FF0000
@@ -78,6 +82,15 @@ static const __device__ __constant__ uint16_t
 static const __device__ __constant__ uint16_t g_dext[30] = {  // Extra bits for distance codes 0..29
   0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13};
 
+
+inline __device__ unsigned int bfe(unsigned int source,
+                                   unsigned int bit_start,
+                                   unsigned int num_bits)
+{
+  unsigned int bits;
+  asm("bfe.u32 %0, %1, %2, %3;" : "=r"(bits) : "r"(source), "r"(bit_start), "r"(num_bits));
+  return bits;
+};
 
 
 
@@ -217,11 +230,11 @@ struct decompress_output {
         uint32_t write_counter = orig_counter + tid;
 
         if(read_counter >= orig_counter){
-                read_counter = (read_counter - orig_counter) % offset + start_counter;
+            read_counter = (read_counter - orig_counter) % offset + start_counter;
         }
 
         uint8_t num_ph =  (len +  NUM_THREAD - 1) / NUM_THREAD;
-        //#pragma unroll 
+        #pragma unroll 
         for(int i = 0; i < num_ph; i++){
             if(i < num_writes){
                 out_ptr[write_counter + WRITE_COL_LEN * idx] = out_ptr[read_counter + WRITE_COL_LEN * idx];
@@ -236,71 +249,71 @@ struct decompress_output {
             counter += len;
 
 
-/*
+
        
 
-        // } else {
-            int tid = threadIdx.x - div * NUM_THREAD;
-            uint32_t orig_counter = __shfl_sync(MASK, counter, idx); // This is equal to the tid's counter value upon entering the function
+        // // } else {
+        //     int tid = threadIdx.x - div * NUM_THREAD;
+        //     uint32_t orig_counter = __shfl_sync(MASK, counter, idx); // This is equal to the tid's counter value upon entering the function
 
-            // TODO: CHANGE
-            uint8_t num_writes = ((((len - tid * NMEMCPY) & MEMCPYLARGEMASK) + (NUM_THREAD * NMEMCPY) - 1) / (NUM_THREAD * NMEMCPY) * NMEMCPY);
-            if (((((len - tid * NMEMCPY + NMEMCPY) & MEMCPYLARGEMASK) + (NUM_THREAD * NMEMCPY) - 1) / (NUM_THREAD * NMEMCPY)) > ((((len - tid * NMEMCPY) & MEMCPYLARGEMASK) + (NUM_THREAD * NMEMCPY) - 1) / (NUM_THREAD * NMEMCPY)))
-                num_writes += (len - tid * NMEMCPY) & MEMCPYSMALLMASK;
-            if (tid * NMEMCPY > len) num_writes = 0;
-            uint32_t start_counter =  orig_counter - offset; // The place to start writing. Notice we subtract offset, not add it.
+        //     // TODO: CHANGE
+        //     uint8_t num_writes = ((((len - tid * NMEMCPY) & MEMCPYLARGEMASK) + (NUM_THREAD * NMEMCPY) - 1) / (NUM_THREAD * NMEMCPY) * NMEMCPY);
+        //     if (((((len - tid * NMEMCPY + NMEMCPY) & MEMCPYLARGEMASK) + (NUM_THREAD * NMEMCPY) - 1) / (NUM_THREAD * NMEMCPY)) > ((((len - tid * NMEMCPY) & MEMCPYLARGEMASK) + (NUM_THREAD * NMEMCPY) - 1) / (NUM_THREAD * NMEMCPY)))
+        //         num_writes += (len - tid * NMEMCPY) & MEMCPYSMALLMASK;
+        //     if (tid * NMEMCPY > len) num_writes = 0;
+        //     uint32_t start_counter =  orig_counter - offset; // The place to start writing. Notice we subtract offset, not add it.
 
-            uint32_t read_counter = start_counter + tid * NMEMCPY; // Start reading from the original counter minus the offset
-            uint32_t write_counter = orig_counter + tid * NMEMCPY; // Start writing from the original counter
+        //     uint32_t read_counter = start_counter + tid * NMEMCPY; // Start reading from the original counter minus the offset
+        //     uint32_t write_counter = orig_counter + tid * NMEMCPY; // Start writing from the original counter
 
-            if(read_counter >= orig_counter){ // If we are reading from ahead of the place we are writing.
-                    read_counter = (read_counter - orig_counter) % offset + start_counter; // Don't really know what this line does.
-            }
+        //     if(read_counter >= orig_counter){ // If we are reading from ahead of the place we are writing.
+        //             read_counter = (read_counter - orig_counter) % offset + start_counter; // Don't really know what this line does.
+        //     }
 
-            uint8_t num_ph =  (len +  (NUM_THREAD * NMEMCPY) - 1) / (NUM_THREAD * NMEMCPY); // The largest amount of times a thread in the warp is writing to memory.
-            //#pragma unroll 
-            for(int i = 0; i < num_ph; i++){
-                if(num_writes - i * NMEMCPY >= NMEMCPY){ // If this thread should write. 4 bytes
-                    // TODO: CHANGE
-                    out_ptr[write_counter + WRITE_COL_LEN * idx] = out_ptr[read_counter + WRITE_COL_LEN * idx];
-                    #if NMEMCPY > 1
-                    out_ptr[write_counter + WRITE_COL_LEN * idx + 1] = out_ptr[read_counter + WRITE_COL_LEN * idx + 1];
-                    #endif
-                    #if NMEMCPY > 2
-                    out_ptr[write_counter + WRITE_COL_LEN * idx + 2] = out_ptr[read_counter + WRITE_COL_LEN * idx + 2];
-                    out_ptr[write_counter + WRITE_COL_LEN * idx + 3] = out_ptr[read_counter + WRITE_COL_LEN * idx + 3];
-                    #endif
-                    // 1 4 byte transaction | 4 1 byte transactions
-                    // char4 out_ptr[idx] = // 4 1bytes read
+        //     uint8_t num_ph =  (len +  (NUM_THREAD * NMEMCPY) - 1) / (NUM_THREAD * NMEMCPY); // The largest amount of times a thread in the warp is writing to memory.
+        //     #pragma unroll 
+        //     for(int i = 0; i < num_ph; i++){
+        //         if(num_writes - i * NMEMCPY >= NMEMCPY){ // If this thread should write. 4 bytes
+        //             // TODO: CHANGE
+        //             out_ptr[write_counter + WRITE_COL_LEN * idx] = out_ptr[read_counter + WRITE_COL_LEN * idx];
+        //             #if NMEMCPY > 1
+        //             out_ptr[write_counter + WRITE_COL_LEN * idx + 1] = out_ptr[read_counter + WRITE_COL_LEN * idx + 1];
+        //             #endif
+        //             #if NMEMCPY > 2
+        //             out_ptr[write_counter + WRITE_COL_LEN * idx + 2] = out_ptr[read_counter + WRITE_COL_LEN * idx + 2];
+        //             out_ptr[write_counter + WRITE_COL_LEN * idx + 3] = out_ptr[read_counter + WRITE_COL_LEN * idx + 3];
+        //             #endif
+        //             // 1 4 byte transaction | 4 1 byte transactions
+        //             // char4 out_ptr[idx] = // 4 1bytes read
 
-                    read_counter += NUM_THREAD * NMEMCPY; // Add the number of bytes that we wrote.
-                    write_counter += NUM_THREAD * NMEMCPY; // Add the number of bytes that we wrote.
-                } 
-                // #if NMEMCPY > 1
-                else if (num_writes - i * NMEMCPY > 0) { // Write however many bytes we have left.
-                    out_ptr[write_counter + WRITE_COL_LEN * idx] = out_ptr[read_counter + WRITE_COL_LEN * idx];
-                    #if NMEMCPY > 2
-                    if (num_writes - i * NMEMCPY > 1) {
-                        out_ptr[write_counter + WRITE_COL_LEN * idx + 1] = out_ptr[read_counter + WRITE_COL_LEN * idx + 1];
-                    }
-                    if (num_writes - i * NMEMCPY > 2) {
-                        out_ptr[write_counter + WRITE_COL_LEN * idx + 2] = out_ptr[read_counter + WRITE_COL_LEN * idx + 2];
-                    }
-                    #endif
-                    read_counter += NUM_THREAD * NMEMCPY; // Add the number of bytes that we wrote.
-                    write_counter += NUM_THREAD * NMEMCPY; // Add the number of bytes that we wrote.
+        //             read_counter += NUM_THREAD * NMEMCPY; // Add the number of bytes that we wrote.
+        //             write_counter += NUM_THREAD * NMEMCPY; // Add the number of bytes that we wrote.
+        //         } 
+        //         // #if NMEMCPY > 1
+        //         else if (num_writes - i * NMEMCPY > 0) { // Write however many bytes we have left.
+        //             out_ptr[write_counter + WRITE_COL_LEN * idx] = out_ptr[read_counter + WRITE_COL_LEN * idx];
+        //             #if NMEMCPY > 2
+        //             if (num_writes - i * NMEMCPY > 1) {
+        //                 out_ptr[write_counter + WRITE_COL_LEN * idx + 1] = out_ptr[read_counter + WRITE_COL_LEN * idx + 1];
+        //             }
+        //             if (num_writes - i * NMEMCPY > 2) {
+        //                 out_ptr[write_counter + WRITE_COL_LEN * idx + 2] = out_ptr[read_counter + WRITE_COL_LEN * idx + 2];
+        //             }
+        //             #endif
+        //             read_counter += NUM_THREAD * NMEMCPY; // Add the number of bytes that we wrote.
+        //             write_counter += NUM_THREAD * NMEMCPY; // Add the number of bytes that we wrote.
 
 
-                }
-                // #endif
-                __syncwarp(); // Synchronize.
-            }
+        //         }
+        //         // #endif
+        //         __syncwarp(); // Synchronize.
+        //     }
         
-            //set the counter
-            if(threadIdx.x == idx)
-                counter += len; // Counter is by thread
-        // }
-*/    
+        //     //set the counter
+        //     if(threadIdx.x == idx)
+        //         counter += len; // Counter is by thread
+        // // }
+  
 
     }
     
@@ -317,7 +330,6 @@ struct decompress_output {
 
 
 };
-
 
 
 
@@ -341,6 +353,51 @@ void reader_warp(decompress_input<READ_COL_TYPE, COMP_COL_TYPE>& in, queue<READ_
         __syncwarp();
         if(done)
             break;
+    }
+}
+
+
+
+template <typename READ_COL_TYPE, typename COMP_COL_TYPE, uint8_t NUM_SUBCHUNKS>
+//__forceinline__ 
+__device__
+void sub_reader_warp(decompress_input<READ_COL_TYPE, COMP_COL_TYPE>& in, queue<READ_COL_TYPE>& rq, uint8_t active_chunks) {
+    //iterate number of chunks for the single reader warp
+   
+
+   // int t = 0;
+
+   // while(true){
+   //      bool done = true;
+   //      for(uint8_t cur_chunk = 0; cur_chunk < active_chunks; cur_chunk++){
+   //          COMP_COL_TYPE v;
+   //          uint8_t rc = comp_read_data_seq(FULL_MASK, &v, in, cur_chunk);
+   //          if(rc != 0)
+   //              done = false;
+
+   //      if(threadIdx.x == 0) printf("rc = %i\n",rc);
+   //          rq.warp_enqueue(&v, cur_chunk * 16, rc);
+   //      }
+   //      __syncwarp();
+   //      if(done)
+   //          break;
+   //  }
+
+
+   int t = 0;
+   uint32_t READ_MASK = (threadIdx.x < 16) ? MASK_2_1 : MASK_2_2;
+   while(true){
+
+        COMP_COL_TYPE v;
+        uint8_t rc = comp_read_data_seq_sub(READ_MASK, &v, in, (threadIdx.x / 16)*16);
+
+        if(rc == 0) {break;}
+
+
+         rq.sub_warp_enqueue(&v, (threadIdx.x / 16) * 16 , rc, READ_MASK, threadIdx.x / 16);
+
+
+         __syncwarp();
     }
 }
 
@@ -373,7 +430,7 @@ __device__ void init_length_lut(inflate_lut *s_lut, const int16_t* cnt, const in
           sym = (256 + g_lens[sym - 257]) | (((1 << lext) - 1) << (16 - 5)) | (len << (24 - 5));
           len += lext;
         }*/
-	sym = (sym << 5) | len;
+	   sym = (sym << 5) | len;
         break;
       }
       symbols += count;  // else update for next length
@@ -398,6 +455,58 @@ __device__ void init_length_lut(inflate_lut *s_lut, const int16_t* cnt, const in
 
 }
 
+
+__device__ void init_length_lut2(inflate_lut *s_lut, const int16_t* cnt, const int16_t* orig_symbols, int t, uint32_t NUM_THREAD)
+{
+
+  int32_t* lut = s_lut -> len_lut;
+
+  for (uint32_t bits = t; bits < (1 << LOG2LENLUT); bits += NUM_THREAD) {
+    int sym                = -10 << 5;
+    unsigned int first     = 0;
+    const int16_t* symbols = orig_symbols;
+
+    unsigned int rbits     = __brev(bits) >> (32 - LOG2LENLUT);
+    for (unsigned int len = 1; len <= LOG2LENLUT; len++) {
+      unsigned int code  = (rbits >> (LOG2LENLUT - len)) - first;
+      unsigned int count = cnt[len];
+     
+      if (code < count) {
+        sym = symbols[code];
+   
+    
+        if (sym > 256) {
+        // printf("sym larger\n");
+            int lext = g_lext[sym - 257];
+          sym = (256 + g_lens[sym - 257]) | (((1 << lext) - 1) << (16 - 5)) | (len << (24 - 5));
+          len += lext;
+        }
+    
+        sym = (sym << 5) | len;
+        break;
+      }
+      symbols += count;  // else update for next length
+      first += count;
+      first <<= 1;
+    }
+    
+    lut[bits] = sym;
+    
+  }
+  if (!t) {
+    unsigned int first = 0;
+    unsigned int index = 0;
+    for (unsigned int len = 1; len <= LOG2LENLUT; len++) {
+      unsigned int count = cnt[len];
+      index += count;
+      first += count;
+      first <<= 1;
+    }
+    s_lut->first_slow_len = first;
+    s_lut->index_slow_len = index;
+  }
+
+}
 
 __device__ void init_distance_lut(inflate_lut *s_lut, const int16_t* cnt, const int16_t* orig_symbols, int t, uint32_t NUM_THREAD)
 {
@@ -443,34 +552,81 @@ __device__ void init_distance_lut(inflate_lut *s_lut, const int16_t* cnt, const 
 
 }
 
+__device__ void init_distance_lut2(inflate_lut *s_lut, const int16_t* cnt, const int16_t* orig_symbols, int t, uint32_t NUM_THREAD)
+{
+
+  int32_t* lut = s_lut -> dist_lut;
+  const int16_t* symbols = orig_symbols;
+
+  for (uint32_t bits = t; bits < (1 << LOG2DISTLUT); bits += NUM_THREAD) {
+    int sym                = 0;
+    unsigned int first     = 0;
+    unsigned int rbits     = __brev(bits) >> (32 - LOG2DISTLUT);
+    symbols = orig_symbols;
+    for (unsigned int len = 1; len <= LOG2DISTLUT; len++) {
+      unsigned int code  = (rbits >> (LOG2DISTLUT - len)) - first;
+      int count = cnt[len];
+     
+      if (code < count) {
+        sym = symbols[code];
+        int dist = symbols[code];
+        int dext = g_dext[dist];
+        sym      = g_dists[dist] | (dext << 15);
+        sym      = (sym << 5) | len;
+        break;
+      }
+      symbols += count;  // else update for next length
+      first += count;
+      first <<= 1;
+    }
+    lut[bits] = sym;  
+  }
+
+  if (!t) {
+    unsigned int first = 0;
+    unsigned int index = 0;
+    for (unsigned int len = 1; len <= LOG2DISTLUT; len++) {
+      unsigned int count = cnt[len];
+      index += count;
+      first += count;
+      first <<= 1;
+    }
+    s_lut->first_slow_dist = first;
+    s_lut->index_slow_dist = index;
+  }
+
+}
+
+
 
 
 template <typename READ_COL_TYPE, size_t in_buff_len = 4>
 //__forceinline__
  __device__
-int16_t decode (input_stream<READ_COL_TYPE, in_buff_len>&  s, const int16_t* const   counts, const int16_t*   symbols){
+int16_t decode (input_stream<READ_COL_TYPE, in_buff_len>&  s, const int16_t* const   counts, const int16_t*   syms){
 
-    //unsigned int len;
-    //unsigned int code;
-    //unsigned int count;
+
     uint32_t next32r = 0;
     s.template peek_n_bits<uint32_t>(32, &next32r);
-    //if(threadIdx.x == 1)
-   // printf("next: %lx\n",(unsigned long)next32r );
 
     next32r = __brev(next32r);
+    const int16_t*   symbols = syms;
 
 
     uint32_t first = 0;
-    #pragma unroll
+    #pragma no unroll
     for (uint8_t len = 1; len <= MAXBITS; len++) {
+        //if(len == LOG2LENLUT + 1) printf("first: %lu\n", first);
+
         uint32_t code  = (next32r >> (32 - len)) - first;
         
         uint16_t count = counts[len];
     if (code < count) 
     {
-        uint32_t temp;
+        uint32_t temp = 0;
         s.template fetch_n_bits<uint32_t>(len, &temp);
+        //printf("code: %lu count: %lu len: %i, off:%i temp:%lx \n", (unsigned long)code, (unsigned long) count ,(int) len, (int) (symbols - syms), (unsigned long) temp);
+
 	return symbols[code];
     }
         symbols += count;  
@@ -480,10 +636,10 @@ int16_t decode (input_stream<READ_COL_TYPE, in_buff_len>&  s, const int16_t* con
     return -10;
 }
 
-template <typename READ_COL_TYPE, size_t in_buff_len = 4>
+template <typename READ_COL_TYPE, int LUT_LEN = 1, size_t in_buff_len = 4>
 //__forceinline__
  __device__
-int16_t decode_lut (input_stream<READ_COL_TYPE, in_buff_len>&  s, const int16_t* const   counts, const int16_t*   symbols, inflate_lut* s_lut){
+int16_t decode_lut (input_stream<READ_COL_TYPE, in_buff_len>&  s, const int16_t* const   counts, const int16_t*   symbols, inflate_lut* s_lut, uint32_t lut_first = 0){
 
     //unsigned int len;
     //unsigned int code;
@@ -496,9 +652,9 @@ int16_t decode_lut (input_stream<READ_COL_TYPE, in_buff_len>&  s, const int16_t*
     next32r = __brev(next32r);
 
 
-    uint32_t first = 0;
-    #pragma unroll
-    for (uint8_t len = 1; len <= MAXBITS; len++) {
+    uint32_t first = lut_first;
+    #pragma no unroll
+    for (uint8_t len = LUT_LEN; len <= MAXBITS; len++) {
         uint32_t code  = (next32r >> (32 - len)) - first;
 
         uint16_t count = counts[len];
@@ -516,6 +672,83 @@ int16_t decode_lut (input_stream<READ_COL_TYPE, in_buff_len>&  s, const int16_t*
 }
 
 
+template <typename READ_COL_TYPE, size_t in_buff_len = 4>
+//__forceinline__
+ __device__
+int32_t decode_len_lut (input_stream<READ_COL_TYPE, in_buff_len>&  s, const int16_t* const   counts, const int16_t*   syms, inflate_lut* s_lut, uint32_t next32){
+
+
+    uint32_t next32r = __brev(next32);
+    const int16_t*   symbols = syms;
+
+    uint32_t first = s_lut -> first_slow_len;
+    #pragma no unroll
+    for (int len = LOG2LENLUT + 1; len <= MAXBITS; len++) {
+        uint32_t code  = (next32r >> (32 - len)) - first;
+
+        uint16_t count = counts[len];
+    if (code < count)
+    {
+        //s.template fetch_n_bits<uint32_t>(len, &temp);
+        int32_t sym = symbols[code];
+        if(sym > 256){
+            sym -= 257;
+            int lext = g_lext[sym];
+          //  printf("g_len: %i ", g_lens[sym]);
+            sym  = 256 + g_lens[sym] + bfe(next32, len, lext);
+           // printf("el: %lu\n", (unsigned long) bfe(next32, len, lext));
+            len += lext;
+
+        }
+        s.skip_n_bits(len);
+
+        return sym;
+    }
+        symbols += count;
+        first += count;
+        first <<= 1;
+    }
+    return -10;
+}
+
+template <typename READ_COL_TYPE, size_t in_buff_len = 4>
+//__forceinline__
+ __device__
+uint16_t decode_dist_lut (input_stream<READ_COL_TYPE, in_buff_len>&  s, const int16_t* const   counts, const int16_t*   syms, inflate_lut* s_lut,  uint32_t next32){
+
+
+    // uint32_t next32r = 0;
+    // s.template peek_n_bits<uint32_t>(32, &next32r);
+
+    uint32_t next32r  = __brev(next32);
+    const int16_t*   symbols = syms;
+
+    uint32_t first = s_lut -> first_slow_dist;
+    #pragma no unroll
+    for (int len = LOG2DISTLUT + 1; len <= MAXBITS; len++) {
+        uint32_t code  = (next32r >> (32 - len)) - first;
+
+        uint16_t count = counts[len];
+    if (code < count)
+    {
+        int dist = symbols[code];
+        int dext = g_dext[dist];
+
+        int off = (g_dists[dist] + bfe(next32, len, dext));
+        len += dext;
+        s.skip_n_bits(len);
+        return (uint16_t)off;
+    }
+        symbols += count;
+        first += count;
+        first <<= 1;
+    }
+    return -10;
+}
+
+
+
+
 //Construct huffman tree
 template <typename READ_COL_TYPE, size_t in_buff_len = 4>
 //__forceinline__
@@ -525,11 +758,12 @@ void construct(input_stream<READ_COL_TYPE, in_buff_len>& __restrict__ s, int16_t
 
 
     int len;
-    #pragma unroll
+    //#pragma  unroll
     for(len = 0; len <= MAXBITS; len++){
         counts[len] = 0;
     }
 
+    #pragma no unroll
     for(len = 0; len < num_codes; len++){
         symbols[len] = 0;
         (counts[length[len]])++;
@@ -540,10 +774,12 @@ void construct(input_stream<READ_COL_TYPE, in_buff_len>& __restrict__ s, int16_t
     //offs[0] = 0;
     offs[1] = 0;
 
+    #pragma no unroll
     for (len = 1; len < MAXBITS; len++){
         offs[len + 1] = offs[len] + counts[len];
     }
 
+    #pragma no unroll
     for(int16_t symbol = 0; symbol < num_codes; symbol++){
          if (length[symbol] != 0){
             symbols[offs[length[symbol]]++] = symbol;
@@ -600,12 +836,13 @@ void decode_dynamic(input_stream<READ_COL_TYPE, in_buff_len>& s, dynamic_huffman
           lengths[g_code_order[index]] = (int16_t)(temp & 0x07);
             temp >>=3;
     }
-   // #pragma unroll
+    //#pragma no unroll
     for (index = 4; index < hclen; index++) {
         s.template fetch_n_bits<uint32_t>(3, &temp);
         lengths[g_code_order[index]] = (int16_t)temp;
     }
 
+   // #pragma no unroll
     for (; index < 19; index++) {
         lengths[g_code_order[index]] = 0;
     }
@@ -778,7 +1015,7 @@ void decode_symbol_lut(input_stream<READ_COL_TYPE, in_buff_len>& s, queue<write_
             
 	    	uint32_t lut_len = dist & 0x1f;
 		  sym_dist = dist >> 5;
-		int32_t temp;
+		int32_t temp = 0;
 		s.template fetch_n_bits<int32_t>(lut_len, &temp);
 
 	    }
@@ -807,16 +1044,17 @@ __device__
 void decode_symbol_dw(input_stream<READ_COL_TYPE, in_buff_len>& s, decompress_output<WRITE_COL_LEN>& out, /*const dynamic_huffman* const huff_tree_ptr, unsigned buff_idx,*/
     const int16_t* const s_len, const int16_t* const lensym_ptr, const int16_t* const s_distcnt, const int16_t* const s_distsym) {
 
-    // if(threadIdx.x != 0) {printf("tid;%i return\n", threadIdx.x); return;}
     while(1){
 
-        uint16_t sym ;
+        uint16_t sym = 0;
         if(threadIdx.x == 0) {sym = decode<READ_COL_TYPE, in_buff_len>(s,  s_len,  lensym_ptr);}
         sym = __shfl_sync(FULL_MASK, sym, 0);
 
         if(sym <= 255) {
             //writing
-             if(threadIdx.x == 0) {out.write_literal(0, sym);}
+             if(threadIdx.x == 0) {out.write_literal(0, sym);
+              //rintf("sym: %x\n", sym);
+          }
 
             // write_queue_ele qe;
             // qe = (uint32_t) sym;
@@ -831,14 +1069,14 @@ void decode_symbol_dw(input_stream<READ_COL_TYPE, in_buff_len>& s, decompress_ou
 
         //lenght, need to parse
         else{
-            uint16_t len;
-            uint16_t off;
+            uint16_t len = 0;
+            uint16_t off = 0;
             if(threadIdx.x == 0){
                 uint32_t extra_len  = 0;
                 if( g_lext[sym - 257] != 0){
                    s.template fetch_n_bits<uint32_t>( g_lext[sym - 257], &extra_len);
                 }
-                
+
                 len = extra_len + g_lens[sym - 257];
                 //distance, 5bits
                 uint16_t  sym_dist = decode<READ_COL_TYPE, in_buff_len>(s,  s_distcnt, s_distsym);    
@@ -864,9 +1102,122 @@ void decode_symbol_dw(input_stream<READ_COL_TYPE, in_buff_len>& s, decompress_ou
 
 }
 
+template <typename READ_COL_TYPE, size_t in_buff_len = 4, size_t WRITE_COL_LEN>
+//__forceinline__ 
+__device__ 
+void decode_symbol_dw_lut(input_stream<READ_COL_TYPE, in_buff_len>& s, decompress_output<WRITE_COL_LEN>& out, /*const dynamic_huffman* const huff_tree_ptr, unsigned buff_idx,*/
+    const int16_t* const s_len, const int16_t* const lensym_ptr, const int16_t* const s_distcnt, const int16_t* const s_distsym, inflate_lut* s_lut) {
+
+    while(1){
+        uint32_t next32 = 0;
+        uint32_t sym = 0;
+        int32_t len_sym = 0;
+
+         if(threadIdx.x == 0){
+            s.template peek_n_bits<uint32_t>(32, &next32);
+            len_sym = (s_lut -> len_lut)[next32 & ((1 << LOG2LENLUT) - 1)];
+            uint32_t len = 0;
+            if ((uint32_t)len_sym < (uint32_t)(0x100 << 5)) {
+                len = len_sym & 0x1f;
+
+                len_sym >>= 5;
+               // printf("len sym: %x\n", len_sym);
+                out.write_literal(0, len_sym);
+            
+                next32 >>= len;
+                s.skip_n_bits(len);
+                len_sym = (s_lut -> len_lut)[next32 & ((1 << LOG2LENLUT) - 1)];
+            }
+
+            if(len_sym > 0){
+                len = len_sym & 0x1f;
+
+                s.skip_n_bits(len);
+                sym = ((len_sym >> 5) & 0x3ff) + ((next32 >> (len_sym >> 24)) & ((len_sym >> 16) & 0x1f));
+            }
+
+            else{
+                sym = decode_len_lut<READ_COL_TYPE, in_buff_len>(s,  s_len,  (lensym_ptr) + s_lut -> index_slow_len, s_lut, (next32));
+            }
+
+        }            
+
+        sym = __shfl_sync(FULL_MASK, sym, 0);
+
+        if(sym <= 255) {
+            //writing
+             if(threadIdx.x == 0) {out.write_literal(0, sym);  }
+        }
+
+        //end of block
+        else if(sym == 256) {
+            break;
+        }
+
+        //lenght, need to parse
+        else{
+            uint16_t len = 0;
+            uint16_t off = 0;
+            if(threadIdx.x == 0){
+
+            //  uint32_t extra_len  = 0;
+            // if( g_lext[sym - 257] != 0){
+            //    s.template fetch_n_bits<uint32_t>( g_lext[sym - 257], &extra_len);
+            // }
+            
+            // len = extra_len + g_lens[sym - 257];
+            // //distance, 5bits
+                 uint16_t sym_dist = 0;     
+               
+                len = (sym & 0x0FFFF) - 256;
+                
+
+                next32 = 0;
+                s.template peek_n_bits<uint32_t>(32, &next32);
+                int dist = (s_lut -> dist_lut)[next32 & ((1 << LOG2DISTLUT) - 1)];
+                uint32_t extra_len_dist = 0;
 
 
+                if(dist > 0){                    
+                    uint32_t lut_len = dist & 0x1f;
+                    int dext = bfe(dist, 20, 5);
+                    dist = bfe(dist, 5, 15);
+                    int cur_off = (dist + bfe(next32, lut_len, dext));
+                    lut_len += dext;
 
+                    off = (uint16_t) cur_off;
+                    s.skip_n_bits(lut_len);
+
+                  // sym_dist = dist >> 5;
+                  // int32_t temp = 0;
+                  // s.template fetch_n_bits<int32_t>(lut_len, &temp);
+                }
+                else{
+                    off = decode_dist_lut<READ_COL_TYPE, in_buff_len>(s,  s_distcnt, s_distsym  + s_lut -> index_slow_dist, s_lut, (next32));    
+                }
+     
+                // if(g_dext[sym_dist] != 0){
+                //     s.template fetch_n_bits<uint32_t>(g_dext[sym_dist], &extra_len_dist);
+                // }
+                // off = extra_len_dist + g_dists[sym_dist];
+
+                              //  printf("len: %lu off: %lu\n", (unsigned long) len, (unsigned long) off);
+
+            }
+
+
+            //shfl sync
+            len = __shfl_sync(FULL_MASK, len, 0);
+            off = __shfl_sync(FULL_MASK, off, 0);     
+
+            out.template col_memcpy_div<32>(0, (uint32_t)len, (uint32_t)off, 0, FULL_MASK);
+
+
+            //writing       
+        }
+    }
+
+}
 
 template <typename READ_COL_TYPE, size_t in_buff_len, uint8_t NUM_SUBCHUNKS>
 //__forceinline__ 
@@ -952,8 +1303,8 @@ void decoder_warp_shared(input_stream<READ_COL_TYPE, in_buff_len>& s,  queue<wri
 
     else{
 
-        uint8_t blast;
-        uint32_t btype;
+        uint8_t blast = 0;
+        uint32_t btype = 0;
         s.template fetch_n_bits<uint32_t>(16, &btype);
         btype = 0;
 
@@ -1005,8 +1356,8 @@ void decoder_warp_lut(input_stream<READ_COL_TYPE, in_buff_len>& s,  queue<write_
 
     MASK = __brev(MASK);
 
-    uint8_t blast;
-    uint32_t btype;
+    uint8_t blast = 0;
+    uint32_t btype = 0;
 
 
 
@@ -1042,7 +1393,7 @@ void decoder_warp_lut(input_stream<READ_COL_TYPE, in_buff_len>& s,  queue<write_
 
             init_length_lut (s_lut,  s_len, (s_tree->dh).lensym, threadIdx.x / NUM_SUBCHUNKS, 32 / NUM_SUBCHUNKS);
 
-	    init_distance_lut (s_lut,  s_distcnt, s_distsym, threadIdx.x / NUM_SUBCHUNKS, 32 / NUM_SUBCHUNKS);
+	        init_distance_lut (s_lut,  s_distcnt, s_distsym, threadIdx.x / NUM_SUBCHUNKS, 32 / NUM_SUBCHUNKS);
 
             __syncwarp(MASK);
 
@@ -1050,6 +1401,8 @@ void decoder_warp_lut(input_stream<READ_COL_TYPE, in_buff_len>& s,  queue<write_
                 decode_symbol_lut<READ_COL_TYPE, in_buff_len>(s, mq, s_len, (s_tree->dh).lensym, s_distcnt, s_distsym, s_lut);
             }
             __syncwarp(MASK);
+
+            //clear_length_lut(s_lut);
 
  	}
 
@@ -1061,7 +1414,7 @@ void decoder_warp_lut(input_stream<READ_COL_TYPE, in_buff_len>& s,  queue<write_
 		
 }
 
-template <typename READ_COL_TYPE, size_t in_buff_len, uint8_t NUM_SUBCHUNKS, size_t WRITE_COL_LEN>
+template <typename READ_COL_TYPE, size_t in_buff_len, uint8_t NUM_SUBCHUNKS, size_t WRITE_COL_LEN >
 //__forceinline__ 
 __device__
 void decoder_writer_warp_shared(input_stream<READ_COL_TYPE, in_buff_len>& s,  decompress_output<WRITE_COL_LEN>& out_d, uint32_t col_len, uint8_t* out, dynamic_huffman* huff_tree_ptr,
@@ -1069,9 +1422,13 @@ void decoder_writer_warp_shared(input_stream<READ_COL_TYPE, in_buff_len>& s,  de
 
 
 
-        uint8_t blast;
-        uint32_t btype;
-        if(threadIdx.x == 0) {s.template fetch_n_bits<uint32_t>(16, &btype);}
+        uint8_t blast = 0;
+        uint32_t btype = 0;
+
+
+        if(threadIdx.x == 0) {
+             s.template fetch_n_bits<uint32_t>(16, &btype);
+        }
         btype = 0;
 
         do{
@@ -1079,6 +1436,8 @@ void decoder_writer_warp_shared(input_stream<READ_COL_TYPE, in_buff_len>& s,  de
             btype =  __shfl_sync(FULL_MASK, btype, 0);
               blast =  (btype & 0x01);
               btype >>= 1;
+
+
 
             //fixed huffman
             if(btype == 1) {
@@ -1089,6 +1448,7 @@ void decoder_writer_warp_shared(input_stream<READ_COL_TYPE, in_buff_len>& s,  de
             }
             else{
                 if(threadIdx.x == 0){decode_dynamic<READ_COL_TYPE, in_buff_len>(s, &(s_tree->dh) ,  0, s_len, s_distcnt, s_distsym, s_off);}
+
                 decode_symbol_dw<READ_COL_TYPE, in_buff_len, WRITE_COL_LEN>(s, out_d, s_len, (s_tree->dh).lensym, s_distcnt, s_distsym);
             }
         
@@ -1128,6 +1488,70 @@ void decoder_writer_warp_shared(input_stream<READ_COL_TYPE, in_buff_len>& s,  de
     //     }
 
     // }while(blast != 1);
+
+    //__syncwarp(FULL_MASK);
+
+}
+
+template <typename READ_COL_TYPE, size_t in_buff_len, uint8_t NUM_SUBCHUNKS, size_t WRITE_COL_LEN >
+//__forceinline__ 
+__device__
+void decoder_writer_warp_shared_lut(input_stream<READ_COL_TYPE, in_buff_len>& s,  decompress_output<WRITE_COL_LEN>& out_d, uint32_t col_len, uint8_t* out, dynamic_huffman* huff_tree_ptr,
+    slot_struct* d_slot_struct, const fix_huffman* const fixed_tree, int16_t* s_len, int16_t* s_distcnt, int16_t* s_distsym, int16_t* s_off, uint8_t active_chunks, s_huffman* s_tree,
+    inflate_lut* s_lut) {
+
+
+
+        uint8_t blast = 0;
+        uint32_t btype = 0;
+
+
+        if(threadIdx.x == 0) {
+             s.template fetch_n_bits<uint32_t>(16, &btype);
+        }
+        btype = 0;
+
+        do{
+            if(threadIdx.x == 0)    {s.template fetch_n_bits<uint32_t>(3, &btype);}
+            btype =  __shfl_sync(FULL_MASK, btype, 0);
+              blast =  (btype & 0x01);
+              btype >>= 1;
+
+
+
+            //fixed huffman
+            if(btype == 1) {
+                __syncwarp();
+
+                init_length_lut2 (s_lut,   fixed_tree -> lencnt, fixed_tree -> lensym, threadIdx.x, 32);
+                init_distance_lut2 (s_lut,  fixed_tree -> distcnt, fixed_tree -> distsym, threadIdx.x, 32);
+
+                __syncwarp();
+                decode_symbol_dw_lut<READ_COL_TYPE, in_buff_len, WRITE_COL_LEN> (s, out_d,  fixed_tree -> lencnt, fixed_tree -> lensym, fixed_tree -> distcnt, fixed_tree -> distsym, s_lut);
+           
+                //decode_symbol_dw<READ_COL_TYPE, in_buff_len, WRITE_COL_LEN> (s, out_d,  fixed_tree -> lencnt, fixed_tree -> lensym, fixed_tree -> distcnt, fixed_tree -> distsym);
+
+            }
+            //dyamic huffman
+            else if (btype == 0){
+            }
+            else{
+                if(threadIdx.x == 0){decode_dynamic<READ_COL_TYPE, in_buff_len>(s, &(s_tree->dh) ,  0, s_len, s_distcnt, s_distsym, s_off);}
+
+                __syncwarp();
+
+                init_length_lut2 (s_lut,  s_len, (s_tree->dh).lensym, threadIdx.x, 32);
+                init_distance_lut2 (s_lut,  s_distcnt, s_distsym, threadIdx.x, 32);
+
+                __syncwarp();
+                decode_symbol_dw_lut<READ_COL_TYPE, in_buff_len, WRITE_COL_LEN>(s, out_d, s_len, (s_tree->dh).lensym, s_distcnt, s_distsym, s_lut);
+                __syncwarp();
+            }
+        
+
+        }while(blast != 1);
+
+    
 
     __syncwarp(FULL_MASK);
 
@@ -1186,7 +1610,7 @@ void writer_warp(queue<write_queue_ele>& mq, decompress_output<WRITE_COL_LEN>& o
 template <typename READ_COL_TYPE, typename COMP_COL_TYPE,  uint8_t NUM_SUBCHUNKS, uint16_t in_queue_size = 4, size_t out_queue_size = 4, size_t local_queue_size = 4,  size_t WRITE_COL_LEN = 512>
 __global__ void 
 //__launch_bounds__ (96, 13)
-//__launch_bounds__ (96, 32)
+//__launch_bounds__ (96, 21)
 inflate(uint8_t* comp_ptr, const uint64_t* const col_len_ptr, const uint64_t* const blk_offset_ptr, uint8_t*out, dynamic_huffman* huff_tree_ptr,
  slot_struct* d_slot_struct, const fix_huffman* const fixed_tree, uint64_t CHUNK_SIZE, uint64_t num_chunks) {
     __shared__ READ_COL_TYPE in_queue_[NUM_SUBCHUNKS][in_queue_size];
@@ -1253,7 +1677,7 @@ inflate(uint8_t* comp_ptr, const uint64_t* const col_len_ptr, const uint64_t* co
 template <typename READ_COL_TYPE, typename COMP_COL_TYPE,  uint8_t NUM_SUBCHUNKS, uint16_t in_queue_size = 4, size_t out_queue_size = 4, size_t local_queue_size = 4,  size_t WRITE_COL_LEN = 512>
 __global__ void 
 //__launch_bounds__ (96, 13)
-//__launch_bounds__ (96, 32)
+__launch_bounds__ (96, 21)
 inflate_shared(uint8_t* comp_ptr, const uint64_t* const col_len_ptr, const uint64_t* const blk_offset_ptr, uint8_t*out, dynamic_huffman* huff_tree_ptr,
  slot_struct* d_slot_struct, const fix_huffman* const fixed_tree, uint64_t CHUNK_SIZE, uint64_t num_chunks) {
     
@@ -1315,7 +1739,7 @@ inflate_shared(uint8_t* comp_ptr, const uint64_t* const col_len_ptr, const uint6
 }
 
 template <typename READ_COL_TYPE, typename COMP_COL_TYPE,  uint8_t NUM_SUBCHUNKS, uint16_t in_queue_size = 4, size_t out_queue_size = 4, size_t local_queue_size = 4,  size_t WRITE_COL_LEN = 512, bool shared_flag = true>
-__launch_bounds__ (96, 32)
+__launch_bounds__ (96, 21)
 __global__ void 
 inflate_lookup(uint8_t* comp_ptr, const uint64_t* const col_len_ptr, const uint64_t* const blk_offset_ptr, uint8_t*out, dynamic_huffman* huff_tree_ptr,
  slot_struct* d_slot_struct, device_space ds, const fix_huffman* const fixed_tree, uint64_t CHUNK_SIZE, uint64_t num_chunks) {
@@ -1409,7 +1833,7 @@ inflate_lookup(uint8_t* comp_ptr, const uint64_t* const col_len_ptr, const uint6
 template <typename READ_COL_TYPE, typename COMP_COL_TYPE,  uint8_t NUM_SUBCHUNKS, uint16_t in_queue_size = 4, size_t out_queue_size = 4, size_t local_queue_size = 4,  size_t WRITE_COL_LEN = 512>
 __global__ void 
 //__launch_bounds__ (96, 13)
-__launch_bounds__ (96, 32)
+__launch_bounds__ (96, 21)
 inflate_volatile(uint8_t* comp_ptr, const uint64_t* const col_len_ptr, const uint64_t* const blk_offset_ptr, uint8_t*out, dynamic_huffman* huff_tree_ptr,
  slot_struct* d_slot_struct, const fix_huffman* const fixed_tree, uint64_t CHUNK_SIZE, uint64_t num_chunks) {
     
@@ -1470,7 +1894,7 @@ inflate_volatile(uint8_t* comp_ptr, const uint64_t* const col_len_ptr, const uin
 }
 template <typename READ_COL_TYPE, typename COMP_COL_TYPE,  uint8_t NUM_SUBCHUNKS, uint16_t in_queue_size = 4, size_t out_queue_size = 4, size_t local_queue_size = 4,  size_t WRITE_COL_LEN = 512, bool shared_flag = true>
 __global__ void 
-__launch_bounds__ (96, 32)
+__launch_bounds__ (96, 21)
 inflate_volatile2(uint8_t* comp_ptr, const uint64_t* const col_len_ptr, const uint64_t* const blk_offset_ptr, uint8_t*out, dynamic_huffman* huff_tree_ptr,
  slot_struct* d_slot_struct, device_space ds, const fix_huffman* const fixed_tree, uint64_t CHUNK_SIZE, uint64_t num_chunks) {
     
@@ -1624,22 +2048,23 @@ inflate_shared_dw(uint8_t* comp_ptr, const uint64_t* const col_len_ptr, const ui
     __syncthreads();
 
 }
-template <typename READ_COL_TYPE, typename COMP_COL_TYPE,  uint8_t NUM_SUBCHUNKS, uint16_t in_queue_size = 4, size_t out_queue_size = 4, size_t local_queue_size = 4,  size_t WRITE_COL_LEN = 512>
+template <typename READ_COL_TYPE, typename COMP_COL_TYPE,  uint8_t NUM_SUBCHUNKS, uint16_t in_queue_size = 4, size_t local_queue_size = 4,  size_t WRITE_COL_LEN = 512>
 __global__ void 
-__launch_bounds__ (96, 32)
+__launch_bounds__ (64, 32)
+//__launch_bounds__ (96, 21)
+//__launch_bounds__ (128, 16)
+
+//__launch_bounds__ (160, 12)
 inflate_shared_dw_2(uint8_t* comp_ptr, const uint64_t* const col_len_ptr, const uint64_t* const blk_offset_ptr, uint8_t*out, dynamic_huffman* huff_tree_ptr,
  slot_struct* d_slot_struct, const fix_huffman* const fixed_tree, uint64_t CHUNK_SIZE, uint64_t num_chunks) {
     
     __shared__ READ_COL_TYPE in_queue_[NUM_SUBCHUNKS][in_queue_size];
     __shared__ simt::atomic<uint8_t,simt::thread_scope_block> h[NUM_SUBCHUNKS];
     __shared__ simt::atomic<uint8_t,simt::thread_scope_block> t[NUM_SUBCHUNKS];
-
-
     __shared__ READ_COL_TYPE local_queue[NUM_SUBCHUNKS][local_queue_size];
-
     __shared__ s_huffman shared_tree [NUM_SUBCHUNKS];
 
-    int bid = blockIdx.x * 2;
+   // int bid = blockIdx.x * NUM_SUBCHUNKS;
 
     //initialize heads and tails to be 0
     if(threadIdx.x < NUM_SUBCHUNKS){
@@ -1654,37 +2079,201 @@ inflate_shared_dw_2(uint8_t* comp_ptr, const uint64_t* const col_len_ptr, const 
        active_chunks = num_chunks - blockIdx.x * NUM_SUBCHUNKS;
     }
 
-    int my_block_idx = blockIdx.x * NUM_SUBCHUNKS + threadIdx.x % NUM_SUBCHUNKS;
-    int my_queue;
-    //uint64_t col_len = (col_len_ptr[my_block_idx]);
-    uint64_t col_len = (blk_offset_ptr[my_block_idx+1] - blk_offset_ptr[my_block_idx]);
+
+    // int my_block_idx = blockIdx.x * NUM_SUBCHUNKS + threadIdx.x % NUM_SUBCHUNKS;
+    // int my_queue = threadIdx.x % NUM_SUBCHUNKS;
+    // uint64_t col_len = (blk_offset_ptr[my_block_idx+1] - blk_offset_ptr[my_block_idx]);
+
+    //int my_block_idx = blockIdx.x * NUM_SUBCHUNKS + threadIdx.x % NUM_SUBCHUNKS;
+
+    // int my_block_idx = threadIdx.y == 0 ? (blockIdx.x * NUM_SUBCHUNKS + threadIdx.x % NUM_SUBCHUNKS) : (blockIdx.x * NUM_SUBCHUNKS + threadIdx.y -1) ;
+    // int my_queue = threadIdx.y == 0 ? threadIdx.x % NUM_SUBCHUNKS : threadIdx.y - 1;
+    // uint64_t col_len= (blk_offset_ptr[my_block_idx+1] - blk_offset_ptr[my_block_idx]);
+
+    int my_block_idx = 0;
+    uint64_t col_len = 0;
+    int my_queue = 0;
 
     if (threadIdx.y == 0) {
+        my_queue =  threadIdx.x % NUM_SUBCHUNKS;
+        my_block_idx = blockIdx.x * NUM_SUBCHUNKS + threadIdx.x % NUM_SUBCHUNKS;
+        col_len = (blk_offset_ptr[my_block_idx+1] - blk_offset_ptr[my_block_idx]);
         queue<READ_COL_TYPE> in_queue(in_queue_[my_queue], h + my_queue , t + my_queue, in_queue_size);
+
+       // queue<READ_COL_TYPE> in_queue(in_queue_[threadIdx.x % NUM_SUBCHUNKS], h +  threadIdx.x % NUM_SUBCHUNKS , t +  threadIdx.x % NUM_SUBCHUNKS, in_queue_size);
         decompress_input<READ_COL_TYPE, COMP_COL_TYPE> d(comp_ptr, col_len, blk_offset_ptr[my_block_idx] / sizeof(COMP_COL_TYPE));
         reader_warp<READ_COL_TYPE, COMP_COL_TYPE, NUM_SUBCHUNKS>(d, in_queue, active_chunks);
     }
 
-    else if (threadIdx.y == 1) {
-        my_block_idx = bid;
-        my_queue = 0;
+    else{
+       
+        my_queue = (threadIdx.y - 1);
+        my_block_idx =  (blockIdx.x * NUM_SUBCHUNKS + threadIdx.y -1);
+        col_len = (blk_offset_ptr[my_block_idx+1] - blk_offset_ptr[my_block_idx]);
+
         queue<READ_COL_TYPE> in_queue(in_queue_[my_queue], h + my_queue, t + my_queue, in_queue_size);
-        decompress_output<WRITE_COL_LEN> d((out + CHUNK_SIZE * bid * NUM_SUBCHUNKS), CHUNK_SIZE);
-        input_stream<READ_COL_TYPE, local_queue_size> s(&in_queue, (uint32_t)col_len, local_queue[my_queue], threadIdx.x < active_chunks);
-        decoder_writer_warp_shared<READ_COL_TYPE, local_queue_size, NUM_SUBCHUNKS, WRITE_COL_LEN>(s, d, (uint32_t) col_len, out, huff_tree_ptr, d_slot_struct, fixed_tree, shared_tree[my_queue].lencnt ,  shared_tree[my_queue].distcnt, shared_tree[my_queue].distsym , shared_tree[my_queue].off, active_chunks, &(shared_tree[my_queue]));
+
+        decompress_output<WRITE_COL_LEN> d((out + CHUNK_SIZE * my_block_idx ), CHUNK_SIZE);
+        input_stream<READ_COL_TYPE, local_queue_size> s(&in_queue, (uint32_t)col_len, local_queue[my_queue], threadIdx.x == 0);
+
+       decoder_writer_warp_shared<READ_COL_TYPE, local_queue_size, 1, WRITE_COL_LEN>(s, d, (uint32_t) col_len, out, huff_tree_ptr, d_slot_struct, fixed_tree, shared_tree[my_queue].lencnt ,  shared_tree[my_queue].distcnt, shared_tree[my_queue].distsym , shared_tree[my_queue].off, active_chunks, &(shared_tree[my_queue]));
     }
 
-    else if (threadIdx.y == 2) {
-        my_block_idx = bid+1;
-        my_queue = 1;
-        queue<READ_COL_TYPE> in_queue(in_queue_[my_queue], h + my_queue, t + my_queue, in_queue_size);
-        decompress_output<WRITE_COL_LEN> d((out + CHUNK_SIZE * (bid+1) * NUM_SUBCHUNKS), CHUNK_SIZE);
-        input_stream<READ_COL_TYPE, local_queue_size> s(&in_queue, (uint32_t)col_len, local_queue[my_queue], threadIdx.x < active_chunks);
-        decoder_writer_warp_shared<READ_COL_TYPE, local_queue_size, NUM_SUBCHUNKS, WRITE_COL_LEN>(s, d, (uint32_t) col_len, out, huff_tree_ptr, d_slot_struct, fixed_tree, shared_tree[my_queue].lencnt ,  shared_tree[my_queue].distcnt, shared_tree[my_queue].distsym , shared_tree[my_queue].off, active_chunks, &(shared_tree[my_queue]));
 
+    // else if (threadIdx.y == 1) {
+    //     my_block_idx = bid;
+    //     my_queue = 0;
+    //     col_len = (blk_offset_ptr[my_block_idx+1] - blk_offset_ptr[my_block_idx]);
+
+    //     queue<READ_COL_TYPE> in_queue(in_queue_[my_queue], h + my_queue, t + my_queue, in_queue_size);
+    //     decompress_output<WRITE_COL_LEN> d((out + CHUNK_SIZE * bid ), CHUNK_SIZE);
+    //     input_stream<READ_COL_TYPE, local_queue_size> s(&in_queue, (uint32_t)col_len, local_queue[my_queue], threadIdx.x == 0);
+    //     decoder_writer_warp_shared<READ_COL_TYPE, local_queue_size, 1, WRITE_COL_LEN>(s, d, (uint32_t) col_len, out, huff_tree_ptr, d_slot_struct, fixed_tree, shared_tree[my_queue].lencnt ,  shared_tree[my_queue].distcnt, shared_tree[my_queue].distsym , shared_tree[my_queue].off, active_chunks, &(shared_tree[my_queue]));
+    // }
+
+    // else if (threadIdx.y == 2) {
+
+    //     my_block_idx = bid+1;
+    //     my_queue = 1;
+    //     col_len = (blk_offset_ptr[my_block_idx+1] - blk_offset_ptr[my_block_idx]);
+    //     queue<READ_COL_TYPE> in_queue(in_queue_[my_queue], h + my_queue, t + my_queue, in_queue_size);
+    //     decompress_output<WRITE_COL_LEN> d((out + CHUNK_SIZE * (bid+1) ), CHUNK_SIZE);
+    //     input_stream<READ_COL_TYPE, local_queue_size> s(&in_queue, (uint32_t)col_len, local_queue[my_queue], threadIdx.x == 0);
+    //     decoder_writer_warp_shared<READ_COL_TYPE, local_queue_size, 1, WRITE_COL_LEN>(s, d, (uint32_t) col_len, out, huff_tree_ptr, d_slot_struct, fixed_tree, shared_tree[my_queue].lencnt ,  shared_tree[my_queue].distcnt, shared_tree[my_queue].distsym , shared_tree[my_queue].off, active_chunks, &(shared_tree[my_queue]));
+
+    // }
+
+    //__syncthreads();
+
+}
+
+template <typename READ_COL_TYPE, typename COMP_COL_TYPE,  uint8_t NUM_SUBCHUNKS, uint16_t in_queue_size = 4, size_t local_queue_size = 4,  size_t WRITE_COL_LEN = 512>
+__global__ void 
+//__launch_bounds__ (64, 32)
+//__launch_bounds__ (96, 21)
+//__launch_bounds__ (160, 12)
+__launch_bounds__ (288, 7)
+
+inflate_shared_dw_2_lut(uint8_t* comp_ptr, const uint64_t* const col_len_ptr, const uint64_t* const blk_offset_ptr, uint8_t*out, dynamic_huffman* huff_tree_ptr,
+ slot_struct* d_slot_struct, const fix_huffman* const fixed_tree, uint64_t CHUNK_SIZE, uint64_t num_chunks) {
+    
+    __shared__ READ_COL_TYPE in_queue_[NUM_SUBCHUNKS][in_queue_size];
+    __shared__ simt::atomic<uint8_t,simt::thread_scope_block> h[NUM_SUBCHUNKS];
+    __shared__ simt::atomic<uint8_t,simt::thread_scope_block> t[NUM_SUBCHUNKS];
+    __shared__ READ_COL_TYPE local_queue[NUM_SUBCHUNKS][local_queue_size];
+    __shared__ s_huffman shared_tree [NUM_SUBCHUNKS];
+
+    __shared__ inflate_lut test_lut [NUM_SUBCHUNKS];
+   
+   // int bid = blockIdx.x * NUM_SUBCHUNKS;
+
+    //initialize heads and tails to be 0
+    if(threadIdx.x < NUM_SUBCHUNKS){
+        h[threadIdx.x] = 0;
+        t[threadIdx.x] = 0;
     }
 
     __syncthreads();
+
+    uint8_t active_chunks = NUM_SUBCHUNKS;
+    if((blockIdx.x+1) * NUM_SUBCHUNKS > num_chunks){
+       active_chunks = num_chunks - blockIdx.x * NUM_SUBCHUNKS;
+    }
+
+    int my_block_idx = 0;
+    uint64_t col_len = 0;
+    int my_queue = 0;
+
+    if (threadIdx.y == 0) {
+        my_queue =  threadIdx.x % NUM_SUBCHUNKS;
+        my_block_idx = blockIdx.x * NUM_SUBCHUNKS + threadIdx.x % NUM_SUBCHUNKS;
+        col_len = (blk_offset_ptr[my_block_idx+1] - blk_offset_ptr[my_block_idx]);
+        queue<READ_COL_TYPE> in_queue(in_queue_[my_queue], h + my_queue , t + my_queue, in_queue_size);
+
+       // queue<READ_COL_TYPE> in_queue(in_queue_[threadIdx.x % NUM_SUBCHUNKS], h +  threadIdx.x % NUM_SUBCHUNKS , t +  threadIdx.x % NUM_SUBCHUNKS, in_queue_size);
+        decompress_input<READ_COL_TYPE, COMP_COL_TYPE> d(comp_ptr, col_len, blk_offset_ptr[my_block_idx] / sizeof(COMP_COL_TYPE));
+        reader_warp<READ_COL_TYPE, COMP_COL_TYPE, NUM_SUBCHUNKS>(d, in_queue, active_chunks);
+    }
+
+    else{
+    
+        my_queue = (threadIdx.y - 1);
+        my_block_idx =  (blockIdx.x * NUM_SUBCHUNKS + threadIdx.y -1);
+        col_len = (blk_offset_ptr[my_block_idx+1] - blk_offset_ptr[my_block_idx]);
+
+        queue<READ_COL_TYPE> in_queue(in_queue_[my_queue], h + my_queue, t + my_queue, in_queue_size);
+
+        decompress_output<WRITE_COL_LEN> d((out + CHUNK_SIZE * my_block_idx ), CHUNK_SIZE);
+        input_stream<READ_COL_TYPE, local_queue_size> s(&in_queue, (uint32_t)col_len, local_queue[my_queue], threadIdx.x == 0);
+
+        decoder_writer_warp_shared_lut<READ_COL_TYPE, local_queue_size, 1, WRITE_COL_LEN>(s, d, (uint32_t) col_len, out, huff_tree_ptr, d_slot_struct, fixed_tree, shared_tree[my_queue].lencnt ,  shared_tree[my_queue].distcnt, shared_tree[my_queue].distsym , shared_tree[my_queue].off, active_chunks, &(shared_tree[my_queue]), test_lut + my_queue);
+    }
+
+}
+
+template <typename READ_COL_TYPE, typename COMP_COL_TYPE,  uint8_t NUM_SUBCHUNKS, uint16_t in_queue_size = 4, size_t local_queue_size = 4,  size_t WRITE_COL_LEN = 512>
+__global__ void 
+//__launch_bounds__ (64, 32)
+__launch_bounds__ (96, 21)
+//__launch_bounds__ (128, 16)
+//__launch_bounds__ (160, 12)
+
+inflate_shared_dw_2_lut_sub(uint8_t* comp_ptr, const uint64_t* const col_len_ptr, const uint64_t* const blk_offset_ptr, uint8_t*out, dynamic_huffman* huff_tree_ptr,
+ slot_struct* d_slot_struct, const fix_huffman* const fixed_tree, uint64_t CHUNK_SIZE, uint64_t num_chunks) {
+    
+    __shared__ READ_COL_TYPE in_queue_[NUM_SUBCHUNKS][in_queue_size];
+    __shared__ simt::atomic<uint8_t,simt::thread_scope_block> h[NUM_SUBCHUNKS];
+    __shared__ simt::atomic<uint8_t,simt::thread_scope_block> t[NUM_SUBCHUNKS];
+    __shared__ READ_COL_TYPE local_queue[NUM_SUBCHUNKS][local_queue_size];
+    __shared__ s_huffman shared_tree [NUM_SUBCHUNKS];
+
+    __shared__ inflate_lut test_lut [NUM_SUBCHUNKS];
+   
+   // int bid = blockIdx.x * NUM_SUBCHUNKS;
+
+    //initialize heads and tails to be 0
+    if(threadIdx.x < NUM_SUBCHUNKS){
+        h[threadIdx.x] = 0;
+        t[threadIdx.x] = 0;
+    }
+
+    __syncthreads();
+
+    uint8_t active_chunks = NUM_SUBCHUNKS;
+    if((blockIdx.x+1) * NUM_SUBCHUNKS > num_chunks){
+       active_chunks = num_chunks - blockIdx.x * NUM_SUBCHUNKS;
+    }
+
+    int my_block_idx = 0;
+    uint64_t col_len = 0;
+    int my_queue = 0;
+
+    if (threadIdx.y == 0) {
+        my_queue =  threadIdx.x / (32/NUM_SUBCHUNKS);
+        my_block_idx = blockIdx.x * NUM_SUBCHUNKS + threadIdx.x / (32/NUM_SUBCHUNKS);
+        col_len = (blk_offset_ptr[my_block_idx+1] - blk_offset_ptr[my_block_idx]);
+        queue<READ_COL_TYPE> in_queue(in_queue_[my_queue], h + my_queue , t + my_queue, in_queue_size);
+
+       // queue<READ_COL_TYPE> in_queue(in_queue_[threadIdx.x % NUM_SUBCHUNKS], h +  threadIdx.x % NUM_SUBCHUNKS , t +  threadIdx.x % NUM_SUBCHUNKS, in_queue_size);
+        decompress_input<READ_COL_TYPE, COMP_COL_TYPE> d(comp_ptr, col_len, blk_offset_ptr[my_block_idx] / sizeof(COMP_COL_TYPE));
+        sub_reader_warp<READ_COL_TYPE, COMP_COL_TYPE, NUM_SUBCHUNKS>(d, in_queue, active_chunks);
+        //reader_warp<READ_COL_TYPE, COMP_COL_TYPE, NUM_SUBCHUNKS>(d, in_queue, active_chunks);
+
+    }
+
+    else{
+       
+        my_queue = (threadIdx.y - 1);
+        my_block_idx =  (blockIdx.x * NUM_SUBCHUNKS + threadIdx.y -1);
+        col_len = (blk_offset_ptr[my_block_idx+1] - blk_offset_ptr[my_block_idx]);
+
+        queue<READ_COL_TYPE> in_queue(in_queue_[my_queue], h + my_queue, t + my_queue, in_queue_size);
+
+        decompress_output<WRITE_COL_LEN> d((out + CHUNK_SIZE * my_block_idx ), CHUNK_SIZE);
+        input_stream<READ_COL_TYPE, local_queue_size> s(&in_queue, (uint32_t)col_len, local_queue[my_queue], threadIdx.x == 0);
+
+        decoder_writer_warp_shared_lut<READ_COL_TYPE, local_queue_size, 1, WRITE_COL_LEN>(s, d, (uint32_t) col_len, out, huff_tree_ptr, d_slot_struct, fixed_tree, shared_tree[my_queue].lencnt ,  shared_tree[my_queue].distcnt, shared_tree[my_queue].distsym , shared_tree[my_queue].off, active_chunks, &(shared_tree[my_queue]), test_lut + my_queue);
+    }
 
 }
 
@@ -1792,25 +2381,58 @@ template <typename READ_COL_TYPE, size_t WRITE_COL_LEN, uint16_t queue_depth, ui
     if(lut_flag){
 
         //inflate_volatile<uint64_t, READ_COL_TYPE, NUM_SUBCHUNKS, queue_depth , queue_depth, 4, WRITE_COL_LEN, shared_tree_flag> <<<gridD,blockD,shared_mem_size>>> (d_in, d_col_len, d_blk_offset, d_out, d_tree, d_slot_struct, d_space, d_f_tree, chunk_size, num_blk);
-        inflate_volatile<uint64_t, READ_COL_TYPE, NUM_SUBCHUNKS, queue_depth , queue_depth, 4, WRITE_COL_LEN> <<<gridD,blockD>>> (d_in, d_col_len, d_blk_offset, d_out, d_tree, d_slot_struct, d_f_tree, chunk_size, num_blk);
+        //inflate_volatile<uint64_t, READ_COL_TYPE, NUM_SUBCHUNKS, queue_depth , queue_depth, 4, WRITE_COL_LEN> <<<gridD,blockD>>> (d_in, d_col_len, d_blk_offset, d_out, d_tree, d_slot_struct, d_f_tree, chunk_size, num_blk);
         //inflate_volatile2<uint64_t, READ_COL_TYPE, NUM_SUBCHUNKS, queue_depth , queue_depth, 4, WRITE_COL_LEN, shared_tree_flag> <<<gridD,blockD,shared_mem_size>>> (d_in, d_col_len, d_blk_offset, d_out, d_tree, d_slot_struct, d_space, d_f_tree, chunk_size, num_blk);
 
-	    //inflate_lookup<uint64_t, READ_COL_TYPE, NUM_SUBCHUNKS, queue_depth , queue_depth, 4, WRITE_COL_LEN, shared_tree_flag> <<<gridD,blockD,shared_mem_size>>> (d_in, d_col_len, d_blk_offset, d_out, d_tree, d_slot_struct, d_space, d_f_tree, chunk_size, num_blk);
+	    inflate_lookup<uint32_t, READ_COL_TYPE, NUM_SUBCHUNKS, queue_depth , queue_depth, 4, WRITE_COL_LEN, shared_tree_flag> <<<gridD,blockD,shared_mem_size>>> (d_in, d_col_len, d_blk_offset, d_out, d_tree, d_slot_struct, d_space, d_f_tree, chunk_size, num_blk);
         
 
     }
 
     else if(shared_tree_flag){
         dim3 gridD2(num_tblk/2,1,1);
+        dim3 gridD4(num_tblk/4,1,1);
+        dim3 blockD5(32,5,1);
+                dim3 blockD4(32,4,1);
+                dim3 blockD9(32,9,1);
+                        dim3 gridD8(num_tblk/8,1,1);
 
-	    inflate_shared<uint64_t, READ_COL_TYPE, NUM_SUBCHUNKS, queue_depth , queue_depth, 4, WRITE_COL_LEN> <<<gridD,blockD>>> (d_in, d_col_len, d_blk_offset, d_out, d_tree, d_slot_struct, d_f_tree, chunk_size, num_blk);
+
+
+        kernel_start = std::chrono::high_resolution_clock::now();
+	   // inflate_shared<uint64_t, READ_COL_TYPE, NUM_SUBCHUNKS, queue_depth , queue_depth, 4, WRITE_COL_LEN> <<<gridD,blockD>>> (d_in, d_col_len, d_blk_offset, d_out, d_tree, d_slot_struct, d_f_tree, chunk_size, num_blk);
         
         //inflate_shared_dw<uint64_t, READ_COL_TYPE, NUM_SUBCHUNKS, queue_depth , queue_depth, 4, WRITE_COL_LEN> <<<gridD,blockD2>>> (d_in, d_col_len, d_blk_offset, d_out, d_tree, d_slot_struct, d_f_tree, chunk_size, num_blk);
-        //inflate_shared_dw_2<uint64_t, READ_COL_TYPE, 2, queue_depth , queue_depth, 4, WRITE_COL_LEN> <<<gridD2,blockD>>> (d_in, d_col_len, d_blk_offset, d_out, d_tree, d_slot_struct, d_f_tree, chunk_size, num_blk);
+       //inflate_shared_dw_2<uint64_t, READ_COL_TYPE, 1, queue_depth , 4, WRITE_COL_LEN> <<<gridD,blockD2>>> (d_in, d_col_len, d_blk_offset, d_out, d_tree, d_slot_struct, d_f_tree, chunk_size, num_blk);
+             
+             //   inflate_shared_dw_2<uint64_t, READ_COL_TYPE, 1, queue_depth , 4, WRITE_COL_LEN> <<<1,blockD2>>> (d_in, d_col_len, d_blk_offset, d_out, d_tree, d_slot_struct, d_f_tree, chunk_size, num_blk);
+
+        //inflate_shared_dw_2<uint64_t, READ_COL_TYPE, 2, queue_depth , 4, WRITE_COL_LEN> <<<gridD2,blockD>>> (d_in, d_col_len, d_blk_offset, d_out, d_tree, d_slot_struct, d_f_tree, chunk_size, num_blk);
+        
+       // inflate_shared_dw_2<uint64_t, READ_COL_TYPE, 4, queue_depth , 4, WRITE_COL_LEN> <<<gridD4,blockD5>>> (d_in, d_col_len, d_blk_offset, d_out, d_tree, d_slot_struct, d_f_tree, chunk_size, num_blk);
+        
+
+
+        inflate_shared_dw_2_lut<uint32_t, READ_COL_TYPE, 8, queue_depth , 8, WRITE_COL_LEN> <<<gridD8,blockD9>>> (d_in, d_col_len, d_blk_offset, d_out, d_tree, d_slot_struct, d_f_tree, chunk_size, num_blk);
+
+
+       //inflate_shared_dw_2_lut<uint64_t, READ_COL_TYPE, 4, queue_depth , 4, WRITE_COL_LEN> <<<gridD4,blockD5>>> (d_in, d_col_len, d_blk_offset, d_out, d_tree, d_slot_struct, d_f_tree, chunk_size, num_blk);
+
+        //inflate_shared_dw_2_lut<uint64_t, READ_COL_TYPE, 2, queue_depth , 4, WRITE_COL_LEN> <<<gridD2,blockD>>> (d_in, d_col_len, d_blk_offset, d_out, d_tree, d_slot_struct, d_f_tree, chunk_size, num_blk);
+     
+      // inflate_shared_dw_2_lut<uint64_t, READ_COL_TYPE, 1, queue_depth , 4, WRITE_COL_LEN> <<<gridD,blockD2>>> (d_in, d_col_len, d_blk_offset, d_out, d_tree, d_slot_struct, d_f_tree, chunk_size, num_blk);
+       
+
+
+
+      // inflate_shared_dw_2_lut_sub<uint64_t, READ_COL_TYPE, 2, queue_depth , 4, WRITE_COL_LEN> <<<gridD2,blockD>>> (d_in, d_col_len, d_blk_offset, d_out, d_tree, d_slot_struct, d_f_tree, chunk_size, num_blk);
+      
+      //  inflate_shared_dw_2_lut_sub<uint64_t, READ_COL_TYPE, 2, queue_depth , 4, WRITE_COL_LEN> <<<1,blockD>>> (d_in, d_col_len, d_blk_offset, d_out, d_tree, d_slot_struct, d_f_tree, chunk_size, num_blk);
+
 
     }
     else{
-        inflate<uint64_t, READ_COL_TYPE, NUM_SUBCHUNKS, queue_depth , queue_depth, 4, WRITE_COL_LEN> <<<gridD,blockD>>> (d_in, d_col_len, d_blk_offset, d_out, d_tree, d_slot_struct,  d_f_tree, chunk_size, num_blk);
+        inflate<uint32_t, READ_COL_TYPE, NUM_SUBCHUNKS, queue_depth , queue_depth, 4, WRITE_COL_LEN> <<<gridD,blockD>>> (d_in, d_col_len, d_blk_offset, d_out, d_tree, d_slot_struct,  d_f_tree, chunk_size, num_blk);
     }
 
     cuda_err_chk(cudaDeviceSynchronize());
