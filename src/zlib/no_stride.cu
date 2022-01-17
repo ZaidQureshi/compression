@@ -164,7 +164,7 @@ int main(int argc, char** argv) {
 //                free(out_);
 
 
-                 deflate::decompress_gpu<uint64_t, 262144/2, 32,1,false, true>(in_, &out_, in_sb.st_size, &out_size, col_, col_sb.st_size, blk_, blk_sb.st_size, chunk_size);
+                 deflate::decompress_gpu<uint32_t, 262144/2, 32,1,false, true>(in_, &out_, in_sb.st_size, &out_size, col_, col_sb.st_size, blk_, blk_sb.st_size, chunk_size);
 /*
  		 free(out_);
 

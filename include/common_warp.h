@@ -469,7 +469,7 @@ struct input_stream {
         q = q_;
         expected_bytes = eb;
 
-        buf.b = shared_b;
+        buff = shared_b;
 
         head = 0;
 
@@ -479,7 +479,7 @@ struct input_stream {
         for (; (count < buff_len) && (read_bytes < expected_bytes);
              count++, read_bytes += sizeof(uint32_t)) {
             // q->dequeue(b.b + count);
-            q -> dequeue(buf + count);
+            q -> dequeue(buff + count);
 
         }
         }
@@ -487,14 +487,14 @@ struct input_stream {
 
     template<typename T>
     __device__
-    void get_n_bits(const uint32_t n, T* out) {
+    void get_n_bits(const uint32_t n, T* out, bool change_state = true) {
 
         *out = (T) 0;
 
-        uint32_t a_val = buf[(head)];
+        uint32_t a_val = buff[(head)];
         uint32_t b_val_idx = (head+1);
         b_val_idx =  b_val_idx % buff_len;
-        uint32_t b_val = buf[b_val_idx];
+        uint32_t b_val = buff[b_val_idx];
 
         uint32_t c_val = __funnelshift_rc(a_val, b_val, uint_bit_offset);
         ((uint32_t*) out)[0] = c_val;
@@ -506,13 +506,14 @@ struct input_stream {
             ((uint32_t*) out)[0] >>= (32 - n);
         }
 
+        if (change_state) {
+            uint_bit_offset += n;
+            if (uint_bit_offset >= 32) {
+                uint_bit_offset = uint_bit_offset % 32;
+                head = (head+1) % buff_len;
 
-        uint_bit_offset += n;
-        if (uint_bit_offset >= 32) {
-            uint_bit_offset = uint_bit_offset % 32;
-            head = (head+1) % buff_len;
-
-            count--;
+                count--;
+            }
         }
     }
 
@@ -522,7 +523,7 @@ struct input_stream {
     __device__
     void fetch_n_bits(const uint32_t n, T* out) {
         while ((count < buff_len) && (read_bytes < expected_bytes)) {
-            q -> dequeue(buf.b + ((head+count) % buff_len));
+            q -> dequeue(buff + ((head+count) % buff_len));
            
             count++;
 
@@ -535,7 +536,7 @@ struct input_stream {
     __device__
     void skip_n_bits(const uint32_t n) {
         while ((count < buff_len) && (read_bytes < expected_bytes)) {
-            q -> dequeue(buf.b + ((head+count) % buff_len));
+            q -> dequeue(buff + ((head+count) % buff_len));
            
             count++;
 
@@ -569,20 +570,13 @@ struct input_stream {
     __device__
     void peek_n_bits(const uint32_t n, T* out) {
         while ((count < buff_len) && (read_bytes < expected_bytes)) { 
-            q -> dequeue(buf.b + ((head+count) % buff_len));
+            q -> dequeue(buff + ((head+count) % buff_len));
             count++;
 
             read_bytes += sizeof(uint32_t);
         }
-        uint8_t count_ = count;
-        uint8_t head_ = head;
-        uint8_t uint_bit_offset_ = uint_bit_offset;
 
-        get_n_bits<T>(n, out);
-
-        count = count_;
-        head = head_;
-        uint_bit_offset = uint_bit_offset_;
+        get_n_bits<T>(n, out, false);
     }
 
 
