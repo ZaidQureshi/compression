@@ -446,20 +446,19 @@ template <typename READ_COL_TYPE, typename COMP_COL_TYPE >
 //consumer of input queue
 template <typename READ_COL_TYPE, uint8_t buff_len = 4>
 struct input_stream {
-    union buff{
-        READ_COL_TYPE* b;
-        uint32_t* u;
-    }buf;
+    uint32_t* buff;
+    // union buff{
+    //     READ_COL_TYPE* b;
+    //     uint32_t* u;
+    // }buf;
     uint8_t head;
     uint8_t count;
-    uint8_t uint_head;
-    uint8_t uint_count;
     
     
     queue<READ_COL_TYPE>* q;
     uint32_t read_bytes;
     uint32_t expected_bytes;
-    uint8_t bu_size = (sizeof(READ_COL_TYPE)* buff_len)/sizeof(uint32_t);
+    //uint8_t bu_size = (sizeof(READ_COL_TYPE)* buff_len)/sizeof(uint32_t);
 
     uint8_t uint_bit_offset;
 
@@ -475,14 +474,12 @@ struct input_stream {
         head = 0;
 
         uint_bit_offset = 0;
-        uint_count = 0;
-        uint_head = 0;
         read_bytes = 0;
         count = 0;
         for (; (count < buff_len) && (read_bytes < expected_bytes);
-             count++, read_bytes += sizeof(READ_COL_TYPE), uint_count += sizeof(READ_COL_TYPE)/sizeof(uint32_t)) {
+             count++, read_bytes += sizeof(uint32_t)) {
             // q->dequeue(b.b + count);
-            q -> dequeue(buf.b + count);
+            q -> dequeue(buf + count);
 
         }
         }
@@ -494,10 +491,10 @@ struct input_stream {
 
         *out = (T) 0;
 
-        uint32_t a_val = buf.u[(uint_head)];
-        uint32_t b_val_idx = (uint_head+1);
-        b_val_idx =  b_val_idx % bu_size;
-        uint32_t b_val = buf.u[b_val_idx];
+        uint32_t a_val = buf[(head)];
+        uint32_t b_val_idx = (head+1);
+        b_val_idx =  b_val_idx % buff_len;
+        uint32_t b_val = buf[b_val_idx];
 
         uint32_t c_val = __funnelshift_rc(a_val, b_val, uint_bit_offset);
         ((uint32_t*) out)[0] = c_val;
@@ -513,12 +510,9 @@ struct input_stream {
         uint_bit_offset += n;
         if (uint_bit_offset >= 32) {
             uint_bit_offset = uint_bit_offset % 32;
-            uint_head = (uint_head+1) % bu_size;
-            if ((uint_head % (sizeof(READ_COL_TYPE)/sizeof(uint32_t))) == 0) {
-                head = (head + 1) % buff_len;
-                count--;
-            }
-            uint_count--;
+            head = (head+1) % buff_len;
+
+            count--;
         }
     }
 
@@ -531,8 +525,8 @@ struct input_stream {
             q -> dequeue(buf.b + ((head+count) % buff_len));
            
             count++;
-            uint_count += sizeof(READ_COL_TYPE)/sizeof(uint32_t);
-            read_bytes += sizeof(READ_COL_TYPE);
+
+            read_bytes += sizeof(uint32_t);
         }
 
         get_n_bits<T>(n, out);
@@ -544,19 +538,16 @@ struct input_stream {
             q -> dequeue(buf.b + ((head+count) % buff_len));
            
             count++;
-            uint_count += sizeof(READ_COL_TYPE)/sizeof(uint32_t);
-            read_bytes += sizeof(READ_COL_TYPE);
+
+            read_bytes += sizeof(uint32_t);
         }
 
         uint_bit_offset += n;
         if (uint_bit_offset >= 32) {
             uint_bit_offset = uint_bit_offset % 32;
-            uint_head = (uint_head+1) % bu_size;
-            if ((uint_head % (sizeof(READ_COL_TYPE)/sizeof(uint32_t))) == 0) {
-                head = (head + 1) % buff_len;
-                count--;
-            }
-            uint_count--;
+            head = (head+1) % buff_len;
+
+            count--;
         }
 
     }
@@ -567,12 +558,8 @@ struct input_stream {
             uint_bit_offset = ((uint_bit_offset + 7)/8) * 8;
             if(uint_bit_offset == 32){
                 uint_bit_offset = 0;
-                uint_head = (uint_head+1) % bu_size;
-                if ((uint_head % (sizeof(READ_COL_TYPE)/sizeof(uint32_t))) == 0) {
-                    head = (head + 1) % buff_len;
-                    count--;
-                }
-                uint_count--;
+                head = (head + 1) % buff_len;
+                count--;
             }
         }
       
@@ -584,21 +571,17 @@ struct input_stream {
         while ((count < buff_len) && (read_bytes < expected_bytes)) { 
             q -> dequeue(buf.b + ((head+count) % buff_len));
             count++;
-            uint_count += sizeof(READ_COL_TYPE)/sizeof(uint32_t);
-            read_bytes += sizeof(READ_COL_TYPE);
+
+            read_bytes += sizeof(uint32_t);
         }
         uint8_t count_ = count;
         uint8_t head_ = head;
-        uint8_t uint_count_ = uint_count;
-        uint8_t uint_head_ = uint_head;
         uint8_t uint_bit_offset_ = uint_bit_offset;
 
         get_n_bits<T>(n, out);
 
         count = count_;
         head = head_;
-        uint_count = uint_count_;
-        uint_head = uint_head_;
         uint_bit_offset = uint_bit_offset_;
     }
 
