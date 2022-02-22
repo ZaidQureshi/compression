@@ -10,8 +10,6 @@
 #include <simt/atomic>
 #include <iostream>
 #include <common_warp.h>
-#include <cooperative_groups.h>
-#include <cooperative_groups/memcpy_async.h>
 
 #define BUFF_LEN 2
 
@@ -71,11 +69,11 @@
 #define MEMCPYSMALLMASK 0x00000003
 
 #define SHARED_MEMCPY NMEMCPY*32*8
-// #define MEMCPY_SIZE_THRESH NMEMCPY*26
-#define MEMCPY_SIZE_THRESH NMEMCPY*26
-
+#define MEMCPY_SIZE_THRESH NMEMCPY*28
 #define MEMCPY_TYPE uint32_t
-using namespace cooperative_groups; 
+
+#define DEBUG 0
+
 static const __device__ __constant__ uint16_t g_lens[29] = {  // Size base for length codes 257..285
   3,  4,  5,  6,  7,  8,  9,  10, 11,  13,  15,  17,  19,  23, 27,
   31, 35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258};
@@ -145,7 +143,7 @@ struct inflate_lut{
 
 
 struct device_space{
-	inflate_lut* d_lut;
+    inflate_lut* d_lut;
 };
 
 
@@ -153,6 +151,7 @@ typedef struct __align__(32)
 {
     simt::atomic<uint8_t, simt::thread_scope_device>  counter;
     simt::atomic<uint8_t, simt::thread_scope_device>  lock[32];
+
 
 } __attribute__((aligned (32))) slot_struct;
 
@@ -225,236 +224,9 @@ struct decompress_output {
             
     }
 
-    template <uint32_t NUM_THREAD = 8,
-              typename TYPE_EXT = uchar4>
-    __device__
-    void col_memcpy_Nbyte_shared_onepass2(TYPE_EXT* arr_shared, uint8_t idx, uint16_t len, uint16_t offset, uint8_t div, uint32_t MASK) {
-// Asynchronous memcpy for load to shared memory.
-    /*
-    Read min(offset/4, len/4) N byte packs into shared memory first. Also read the N byte pack of memory at the start of the counter.
-    'Prefix' can be written as a combination of the N byte pack of memory at the start and the first pack in shared memory.
-    'Suffix' can be written as the last N byte pack with anything at the end, unless we are writting the very last N byte pack in the column.
-    */
-    // cooperative_groups::thread_block block = cooperative_groups::this_thread_block();
-    // cooperative_groups::thread_group tile32 = cooperative_groups::tiled_partition(block, 32);
-    // cuda::barrier<thread_scope_block> bar;
-    // init(&bar, 1);
-
-    // Share the counter from thread idx
-    // if (threadIdx.x == 0) printf("%d\n", threadIdx.y);
-    int tid = threadIdx.x - div * NUM_THREAD;
-    uint32_t orig_counter = __shfl_sync(MASK, counter, idx);
-    uint32_t start_counter = orig_counter - offset;
-    // uint8_t shared_offset = (threadIdx.y - 1) * (32 * NMEMCPY);
-    uint8_t shared_offset = 0;
-
-
-    // Check if we are at the end of a column.
-    // if ((orig_counter + len) % WRITE_COL_LEN == 0) {
-    //     col_memcpy_div<32>(idx, len, offset, div, MASK);
-    //     return;
-    // }
-
-    // Calculate how many bytes we are misaligned in both writing and reading.
-    uint8_t bits_written_in_first_pack = NMEMCPY - ((orig_counter + WRITE_COL_LEN * idx) & MEMCPYSMALLMASK);
-
-    // Recast the output array as an N byte array.
-    TYPE_EXT* out_ptr_temp = reinterpret_cast<TYPE_EXT*>(out_ptr);
-
-    // Write the prefix from global memory to global memory
-    // REPLACE
-    if (threadIdx.x == 0)
-        memcpy(&out_ptr[orig_counter + WRITE_COL_LEN * idx], &out_ptr[start_counter + WRITE_COL_LEN * idx], bits_written_in_first_pack);
-    // cooperative_groups::memcpy_async(tile32, &out_ptr[orig_counter + WRITE_COL_LEN * idx], &out_ptr[start_counter + WRITE_COL_LEN * idx], bits_written_in_first_pack);
-    // cuda::memcpy_async(&out_ptr[orig_counter + WRITE_COL_LEN * idx], &out_ptr[start_counter + WRITE_COL_LEN * idx], bits_written_in_first_pack, bar);
-
-    // Start reading in data. An additional thread is needed to load in the data at the start of our write section.
-    uint32_t read_pack_addr = (start_counter + WRITE_COL_LEN * idx + tid * NMEMCPY);
-    uint8_t reading_starting_bit_number = read_pack_addr & MEMCPYSMALLMASK;
-
-
-    // Get the total amount of unique bits that we care about reading.
-    uint8_t total_unique_bits = min(offset, len);
-
-    // Calculate the read address for the threads. Load in N bytes based on either the size of offset or the size of len.
-    uint8_t num_packs = (total_unique_bits + reading_starting_bit_number + NMEMCPY - 1) >> NMEMCPYLOG2;
-
-    // REPLACE
-    if (threadIdx.x == 0){
-        memcpy(arr_shared, &out_ptr_temp[(start_counter + WRITE_COL_LEN * idx) >> NMEMCPYLOG2], num_packs * NMEMCPY);
-        // printf("%d\n", reading_starting_bit_number);
-    }
-    // cuda::memcpy_async(arr_shared, &out_ptr_temp[read_pack_addr], num_packs * NMEMCPY, bar);
-    // cooperative_groups::memcpy_async(tile32, arr_shared, &out_ptr_temp[(start_counter + WRITE_COL_LEN * idx) >> NMEMCPYLOG2], num_packs * NMEMCPY);
-
-    uint8_t shift;
-    uint8_t idx2;
-    TYPE_EXT pack;
-    // Load the last 2 control words
-    // TODO: FIX incorrect control words
-    if (threadIdx.x < 2) {
-        idx2 = 0;
-        // Starting control word shift is reading starting bit number
-        // Ending control word shift is (reading starting bit number + total unique bits) & MASK
-        shift = reading_starting_bit_number;
-        if (threadIdx.x == 0) {
-            idx2 = num_packs - 1;
-            shift += total_unique_bits;
-            if (num_packs > 1) {
-                idx2 -= 1;
-            }
-        }
-            
-        shift = shift & MEMCPYSMALLMASK;
-
-        if (threadIdx.x == 0 && num_packs > 1 && shift == 0) {
-            shift = 4;
-            // shift = NMEMCPY - shift;
-            // shift += 1;
-        }
-        
-        // if (shift == 0 && threadIdx.x == 0){
-        //     shift = NMEMCPY;
-        // }
-        
-        // Funnel Shift?
-        // pack = (pack << (shift * 8)) | out_ptr_temp[read_pack_addr+1] >> ((4 - shift) * 8);
-        // pack = __funnelshift_lc(out_ptr_temp[read_pack_addr+1], pack, shift*8);
-    }
-    // WAIT
-    // cooperative_groups::wait(tile32);
-    __syncwarp();
-
-
-    if (threadIdx.x < 2) {
-        pack = __funnelshift_rc(arr_shared[idx2], arr_shared[idx2+1], shift*8);
-        arr_shared[num_packs + threadIdx.x] = pack;
-    }
-
-    // Get the amount of bits in the last pack
-    uint8_t bits_written_in_last_pack = (len - bits_written_in_first_pack) & MEMCPYSMALLMASK;
-    // if (bits_written_in_last_pack == 0) bits_written_in_last_pack = 4;
-
-
-    // Calculate how many writing operations to perform.
-    // TODO: Deal with (+ NMEMCPY in line below)
-    int8_t num_writes = ((len - bits_written_in_first_pack - bits_written_in_last_pack - tid * NMEMCPY + (NUM_THREAD * NMEMCPY) - 1) / (NUM_THREAD * NMEMCPY));
-    // if (tid * NMEMCPY + bits_written_in_first_pack > len) {
-    //     num_writes = 0;
-    // }
-
-    // Calculate the number of times that the thread with the most blocks has to write.
-    uint8_t num_ph = (len - bits_written_in_first_pack + (NUM_THREAD * NMEMCPY) - 1) / (NUM_THREAD * NMEMCPY);
-
-    // Calculate the write address
-    uint32_t write_counter = (orig_counter + WRITE_COL_LEN * idx + tid * NMEMCPY + bits_written_in_first_pack);
-
-    // cooperative_groups::wait(tile32);
-    __syncwarp();
-    // if (threadIdx.x == 0 && div == 79) {
-    //     printf("Length: %d\n", len);
-    //     printf("Offset: %d\n", offset);
-
-    //     printf("Writing: Location: %d\n", (orig_counter + WRITE_COL_LEN * idx));
-    //     printf("Writing: Starting bits: %d\n", bits_written_in_first_pack);
-    //     printf("Reading: Starting bits: %d\n", reading_starting_bit_number);
-    //     printf("Num Packs: %d\n", num_packs);
-    //     printf("Shared:\n");
-
-    //     for (int temp = 0; temp < num_packs + 2; temp++) {
-    //         printf("%08x\n", arr_shared[temp]);
-    //     }
-    //     printf("\n");
-    // }
-
-    // Finally begin the memcpy operation
-    for(int i = 0; i < num_ph; i++){
-        if(i < num_writes){
-            // We shouldn't have to worry about underflow as we manually set the indices later.
-            int32_t total_bits_written = bits_written_in_first_pack + (threadIdx.x) * NMEMCPY + (i * 32 * NMEMCPY);
-            if (total_bits_written < 0) total_bits_written = 0;
-
-            // Transform this into the current bit that we start writing in this run.
-            uint8_t current_bit_in_run = total_bits_written % total_unique_bits;
-            uint8_t current_pack_in_run = (current_bit_in_run + reading_starting_bit_number) >> NMEMCPYLOG2;
-
-            // Each thread will load two packs. Get the indices.
-            uint8_t first_pack_idx = current_pack_in_run;
-            uint8_t second_pack_idx = first_pack_idx + 1;
-
-            // Deal with the control words. First write reads from words 2 and 1. Any writes at the end read from 0 and 1.
-            if(current_bit_in_run > total_unique_bits - NMEMCPY) {
-                first_pack_idx = num_packs;
-                second_pack_idx = num_packs + 1;
-            }
-
-            // Load in the packs from shared memory.
-            TYPE_EXT pack1 = arr_shared[first_pack_idx + shared_offset];
-            TYPE_EXT pack2 = arr_shared[second_pack_idx + shared_offset];
-
-            // Calculate the shift needed to combine the packs. Special cases above have modified shifts.
-            uint8_t shift = (current_bit_in_run + reading_starting_bit_number) & MEMCPYSMALLMASK;
-            // out_ptr_temp[write_counter >> NMEMCPYLOG2] = shift;
-
-            if (current_bit_in_run > total_unique_bits - NMEMCPY) {
-                shift = NMEMCPY + current_bit_in_run - total_unique_bits;
-            }
-
-            // Perform the funnel shift
-            // pack1 = __funnelshift_lc(pack2, pack1, shift * 8);
-            pack1 = __funnelshift_rc(pack1, pack2, shift * 8);
-            // printf("%08x\n", pack1);
-
-            out_ptr_temp[write_counter >> NMEMCPYLOG2] = pack1;
-
-            // Shouldn't need first case
-            // if (i == 0) write_counter += (NUM_THREAD - 1) * NMEMCPY + bits_written_in_first_pack;
-            write_counter += NUM_THREAD * NMEMCPY;
-            // if (div == 79) {
-            //     printf("SHIFT: %d\n", shift);
-            //     printf("FIRST: %d\n", first_pack_idx);
-            // }
-
-            // if (write_counter >> NMEMCPYLOG2 == 5) printf("%d %d\n", offset, len);
-        } 
-
-    }
-    // Write the suffix.
-    if (threadIdx.x < bits_written_in_last_pack) {
-        // We shouldn't have to worry about underflow as we manually set the indices later.
-        uint32_t total_bits_written = len - bits_written_in_last_pack + threadIdx.x;
-
-        // Transform this into the current bit that we start writing in this run.
-        uint8_t current_bit_in_run = total_bits_written % total_unique_bits;
-        uint8_t current_pack_in_run = (current_bit_in_run + reading_starting_bit_number) >> NMEMCPYLOG2;
-        uint8_t shift = (current_bit_in_run + reading_starting_bit_number) & MEMCPYSMALLMASK;
-        // if (current_bit_in_run > total_unique_bits - NMEMCPY) {
-        //     shift = NMEMCPY + current_bit_in_run - total_unique_bits;
-        // }
-        // if (total_unique_bits - current_bit_in_run <= NMEMCPY) {
-        //     shift = total_unique_bits - current_bit_in_run - 1;
-        // }
-        // if (div == 79) {
-        //     printf("%d\n", shift);
-        //     printf("%08x\n", (arr_shared[current_pack_in_run] >> ((shift) * 8)) & 0x000000ff);
-        //     printf("%08x\n", orig_counter + idx * WRITE_COL_LEN + total_bits_written);
-        // }
-
-        out_ptr[orig_counter + idx * WRITE_COL_LEN + total_bits_written] = (uint8_t) ((arr_shared[current_pack_in_run] >> ((shift) * 8)) & 0x000000ff);
-    }
-
-    // Increment the counter by len. No race condition because we are using the full warp mask.
-    if(threadIdx.x == idx)
-        counter += len;
-    __syncwarp();
-    }
-
-    
     template <uint32_t NUM_THREAD = 8>
-   // __forceinline__ 
     __device__
     void col_memcpy_div(uint8_t idx, uint16_t len, uint16_t offset, uint8_t div, uint32_t MASK) {
-       
         int tid = threadIdx.x - div * NUM_THREAD;
         uint32_t orig_counter = __shfl_sync(MASK, counter, idx);
 
@@ -477,78 +249,412 @@ struct decompress_output {
                 read_counter += NUM_THREAD;
                 write_counter += NUM_THREAD;
             }
+          __syncwarp();
+        }
+
+        //set the counter
+        if(threadIdx.x == idx)
+            counter += len;
+    }
+
+    template <uint32_t NUM_THREAD = 8,
+              typename TYPE_EXT = uchar4>
+    __device__
+    void col_memcpy_Nbyte_shared_onepass(TYPE_EXT* arr_shared, uint8_t idx, uint16_t len, uint16_t offset, uint8_t div, uint32_t MASK) {
+        // Asynchronous memcpy for load to shared memory.
+        /*
+        Read min(offset/4, len/4) N byte packs into shared memory first. Also read the N byte pack of memory at the start of the counter.
+        'Prefix' can be written as a combination of the N byte pack of memory at the start and the first pack in shared memory.
+        'Suffix' can be written as the last N byte pack with anything at the end, unless we are writting the very last N byte pack in the column.
+        */
+
+        // Share the counter from thread idx
+        // if (threadIdx.x == 0) printf("%d\n", threadIdx.y);
+        int tid = threadIdx.x - div * NUM_THREAD;
+        uint32_t orig_counter = __shfl_sync(MASK, counter, idx);
+        uint32_t start_counter = orig_counter - offset;
+        // uint8_t shared_offset = (threadIdx.y - 1) * (32 * NMEMCPY);
+        uint8_t shared_offset = 0;
+
+
+        // Check if we are at the end of a column.
+        if ((orig_counter + len) % WRITE_COL_LEN == 0) {
+            col_memcpy_div<32>(idx, len, offset, div, MASK);
+            return;
+        }
+
+        // Recast the output array as an N byte array.
+        TYPE_EXT* out_ptr_temp = reinterpret_cast<TYPE_EXT*>(out_ptr);
+
+        // Start reading in data. An additional thread is needed to load in the data at the start of our write section.
+        uint32_t read_pack_addr = (start_counter + WRITE_COL_LEN * idx + tid * NMEMCPY);
+        uint8_t reading_starting_bit_number = read_pack_addr & MEMCPYSMALLMASK;
+
+        // Get the total amount of unique bits that we care about reading.
+        uint8_t total_unique_bits = min(offset, len);
+
+        // Calculate the read address for the threads. Load in N bytes based on either the size of offset or the size of len.
+        uint8_t num_packs = (total_unique_bits + reading_starting_bit_number + NMEMCPY - 1) >> NMEMCPYLOG2;
+
+        // Need to deal with the three control words. First is the funneled end pack, next is the funneled start pack, last is the starting bytes.
+        if (threadIdx.x == num_packs + 2) {
+            read_pack_addr = (orig_counter + WRITE_COL_LEN * idx);
+        }
+        if (threadIdx.x == num_packs + 1) {
+            read_pack_addr -= NMEMCPY * threadIdx.x;
+        }
+        if (threadIdx.x == num_packs) {
+          if (read_pack_addr >= NMEMCPY*2)
+            read_pack_addr -= NMEMCPY * 2;
+        }
+
+        // Calculate how many bytes we are misaligned in both writing and reading.
+        uint8_t bits_written_in_first_pack = NMEMCPY - ((orig_counter + WRITE_COL_LEN * idx) & MEMCPYSMALLMASK);
+        read_pack_addr = read_pack_addr >> NMEMCPYLOG2;
+
+        // Calculate how many writing operations to perform.
+        uint8_t num_writes = ((len - bits_written_in_first_pack + NMEMCPY - tid * NMEMCPY + (NUM_THREAD * NMEMCPY) - 1) / (NUM_THREAD * NMEMCPY));
+        if (tid * NMEMCPY + bits_written_in_first_pack > len) {
+            num_writes = 0;
+        }
+
+        // Calculate the number of times that the thread with the most blocks has to write.
+        uint8_t num_ph = (len - bits_written_in_first_pack + NMEMCPY + (NUM_THREAD * NMEMCPY) - 1) / (NUM_THREAD * NMEMCPY);
+
+
+        if (threadIdx.x < num_packs + 3) {
+            // Load an N byte pack from memory and store it into shared memory.
+            // printf("%d\n", read_pack_addr);
+            MEMCPY_TYPE pack = out_ptr_temp[read_pack_addr];
+            
+            // Give the control words their special treatments.
+            if (threadIdx.x == num_packs || threadIdx.x == num_packs + 1) {
+                // Starting control word shift is reading starting bit number
+                // Ending control word shift is (reading starting bit number + total unique bits) & MASK
+                uint8_t shift = reading_starting_bit_number;
+                if (threadIdx.x == num_packs) {
+                    shift += total_unique_bits;
+                }
+                    
+                shift = shift & MEMCPYSMALLMASK;
+                
+                if (shift == 0 && threadIdx.x == num_packs){
+                    shift = NMEMCPY;
+                }
+                
+                // Funnel Shift?
+                // pack = (pack << (shift * 8)) | out_ptr_temp[read_pack_addr+1] >> ((4 - shift) * 8);
+                // pack = __funnelshift_lc(out_ptr_temp[read_pack_addr+1], pack, shift*8);
+                pack = __funnelshift_rc(pack, out_ptr_temp[read_pack_addr+1], shift*8); // 08070605 | 07060504 | 0b0a0908
+
+            }
+
+            arr_shared[threadIdx.x + shared_offset] = pack;
+        }
+
+        // Calculate the write address
+        uint32_t write_counter = (orig_counter + WRITE_COL_LEN * idx + tid * NMEMCPY);
+
+        __syncwarp();
+
+        // Finally begin the memcpy operation
+        for(int i = 0; i < num_ph; i++){
+            if(i < num_writes){
+                // We shouldn't have to worry about underflow as we manually set the indices later.
+                uint32_t total_bits_written = bits_written_in_first_pack + (threadIdx.x - 1) * NMEMCPY + (i * 32 * NMEMCPY);
+
+                // Transform this into the current bit that we start writing in this run.
+                uint8_t current_bit_in_run = total_bits_written % total_unique_bits;
+                uint8_t current_pack_in_run = (current_bit_in_run + reading_starting_bit_number) >> NMEMCPYLOG2;
+
+                // Each thread will load two packs. Get the indices.
+                uint8_t first_pack_idx = current_pack_in_run;
+                uint8_t second_pack_idx = first_pack_idx + 1;
+
+                // Deal with the control words. First write reads from words 2 and 1. Any writes at the end read from 0 and 1.
+                if (threadIdx.x == 0 && i == 0) {
+                    first_pack_idx = num_packs + 2;
+                    second_pack_idx = num_packs + 1;
+                }
+                else if(current_bit_in_run > total_unique_bits - NMEMCPY) {
+                    first_pack_idx = num_packs;
+                    second_pack_idx = num_packs + 1;
+                }
+
+                // Load in the packs from shared memory.
+                MEMCPY_TYPE pack1 = arr_shared[first_pack_idx + shared_offset];
+                MEMCPY_TYPE pack2 = arr_shared[second_pack_idx + shared_offset];
+
+                // Calculate the shift needed to combine the packs. Special cases above have modified shifts.
+                uint8_t shift = (current_bit_in_run + reading_starting_bit_number) & MEMCPYSMALLMASK;
+                if (threadIdx.x == 0 && i == 0) {
+                    shift = 0;
+                    // Need to perform the bitwise operations on pack to get the correct result.
+                    // pack1 = (pack1 & (0xffffffff << bits_written_in_first_pack*8)) | (pack2 >> (NMEMCPY -  bits_written_in_first_pack)*8);
+                    pack1 = ((pack1 << (bits_written_in_first_pack)*8) >> (bits_written_in_first_pack)*8) | pack2 << ((NMEMCPY - bits_written_in_first_pack) * 8);
+                }
+                else if (current_bit_in_run > total_unique_bits - NMEMCPY) {
+                    shift = NMEMCPY + current_bit_in_run - total_unique_bits;
+                }
+
+                // Perform the funnel shift
+                // pack1 = __funnelshift_lc(pack2, pack1, shift * 8);
+                pack1 = __funnelshift_rc(pack1, pack2, shift * 8);
+                // pack1 = len;
+                // pack1 = num_writes;
+
+
+                out_ptr_temp[write_counter >> NMEMCPYLOG2] = pack1;
+                write_counter += NUM_THREAD * NMEMCPY;
+
+                // if (write_counter >> NMEMCPYLOG2 == 5) printf("%d %d\n", offset, len);
+            } 
+          __syncwarp();
+
+        }
+    
+        // Increment the counter by len. No race condition because we are using the full warp mask.
+        if(threadIdx.x == idx)
+            counter += len;
+
+
+    }
+
+    template <uint32_t NUM_THREAD = 8,
+              typename TYPE_EXT = uchar4>
+    __device__
+    // Called if Offset < N
+    void col_memcpy_Nbyte_shared_onepack(TYPE_EXT* arr_shared, uint8_t idx, uint16_t len, uint16_t offset, uint8_t div, uint32_t MASK) {
+        /*
+        Read 2 packs and shift them into one, store in shared memory
+        The first <offset> threads read these two values and concatenate them into one pack, storing the result in shared memory.
+        'Prefix' can be written as a combination of the N byte pack of memory at the start and the first pack in shared memory.
+        'Suffix' can be written as the last N byte pack with anything at the end, unless we are writing the very last N byte pack in the column.
+        'Body' can be written by finding the correct index in the shared memory and simply writing that value.
+        */
+
+        int tid = threadIdx.x - div * NUM_THREAD;
+        uint32_t orig_counter = __shfl_sync(MASK, counter, idx);
+
+        /* TODO: CHECK IF WE ARE AT THE EDGE OF COLUMN. IF WE ARE, THEN CALL THE STANDARD FUNCTION AND RETURN */
+        if ((orig_counter + len) % WRITE_COL_LEN == 0) {
+            col_memcpy_div<32>(idx, len, offset, div, MASK);
+            return;
+        }
+
+        // Recast the output array as an N byte.
+        TYPE_EXT* out_ptr_temp = reinterpret_cast<TYPE_EXT*>(out_ptr);
+
+        // Calculate the read address for the first two threads. There is a chance this is already aligned. Thread 2 loads the pack at the start of memory.
+        uint32_t start_counter = orig_counter - offset;
+
+        if (threadIdx.x <= 2) {
+            uint32_t read_pack_addr;
+            if (threadIdx.x < 2)
+                read_pack_addr = start_counter + WRITE_COL_LEN * idx + tid * NMEMCPY;
+            else
+                read_pack_addr = orig_counter + WRITE_COL_LEN * idx;
+            arr_shared[threadIdx.x] = out_ptr_temp[read_pack_addr >> NMEMCPYLOG2];
+        }
+
+        // Calculate which entry we start reading from based on the amount of unaligned bits in the prefix.
+        uint8_t write_offset = (offset - (orig_counter + WRITE_COL_LEN * idx) & MEMCPYSMALLMASK) % offset; // The bit we are on.
+        /* TODO: CHANGE THIS FOR OFFSET = 2, 1 */
+
+        __syncwarp();
+
+        // Transform the packs that you have read into the possible combinations.
+        if (threadIdx.x < offset + 1) {
+            uint8_t start_offset = ((start_counter + WRITE_COL_LEN * idx) & MEMCPYSMALLMASK);
+
+            TYPE_EXT pack_use = __funnelshift_lc(arr_shared[1], arr_shared[0], start_offset * 8);
+            // Write the prefix by making a pack in shared memory.
+            if (threadIdx.x == NMEMCPY) pack_use = ((arr_shared[2] >> ((NMEMCPY - write_offset) * 8)) << ((NMEMCPY - write_offset) * 8)) | pack_use >> ((NMEMCPY - 1 - write_offset) * 8);
+
+            #if NMEMCPY == 2
+            pack_use = make_uchar2((pack_use >> ((1 - threadIdx.x) * 8)) & 0x000000ff, (pack_use >> ((threadIdx.x) * 8)) & 0x000000ff);
+            #endif
+            #if NMEMCPY == 4
+            pack_use = make_uchar4((pack_use >> ((2 - threadIdx.x + 1) * 8)) & 0x000000ff, (pack_use >> (((1 - threadIdx.x) % 3 + 1) * 8)) & 0x000000ff,
+                                   (pack_use >> (((-1 * threadIdx.x) % 3 + 1) * 8)) & 0x000000ff, (pack_use >> ((2 - threadIdx.x + 1) * 8)) & 0x000000ff);
+            #endif
+
+            arr_shared[threadIdx.x + 3] = pack_use;
+
+        }
+
+        // Finally, we can write to output memory.
+        uint32_t write_counter = (start_counter + tid * NMEMCPY + WRITE_COL_LEN * idx) >> NMEMCPYLOG2;
+
+        uint8_t num_writes = ((len - write_offset - 1 + NMEMCPY - tid * NMEMCPY + (NUM_THREAD * NMEMCPY) - 1) / (NUM_THREAD * NMEMCPY));
+        if (tid * NMEMCPY + write_offset > len) num_writes = 0;
+
+        uint8_t num_ph =  (len - write_counter - 1 + NMEMCPY + (NUM_THREAD * NMEMCPY) - 1) / (NUM_THREAD * NMEMCPY);
+        // if (write_counter > len) num_ph = 0;
+
+        // Set to the correct write offset that we need for writing
+        /* TODO: CHANGE THIS FOR OFFSET = 2, 1 */
+        if (write_offset == offset - 1) write_offset = 0;
+
+        __syncwarp();
+
+        for(int i = 0; i < num_ph; i++){
+            if(i < num_writes){
+                // Memcpy
+                uint8_t shared_idx;
+                if (threadIdx.x == 0 && i == 0) shared_idx = 3 + NMEMCPY;
+                else shared_idx = 3 + (write_offset + i * 32 + threadIdx.x) % offset; // Read offset?
+
+                out_ptr_temp[write_counter] = arr_shared[shared_idx];
+
+                // Adjust the read and write locations.
+                // read_counter += NUM_THREAD * NMEMCPY;
+                write_counter += NUM_THREAD * NMEMCPY;
+            } 
             __syncwarp();
         }
     
-        //set the counter
+        // Increment the counter by len. No race condition because we are using the full warp mask.
         if(threadIdx.x == idx)
             counter += len;
 
 
 
-       
 
-        // // } else {
-        //     int tid = threadIdx.x - div * NUM_THREAD;
-        //     uint32_t orig_counter = __shfl_sync(MASK, counter, idx); // This is equal to the tid's counter value upon entering the function
+    }
+    
+    template <uint32_t NUM_THREAD = 8>
+   // __forceinline__ 
+    __device__
+    void col_memcpy_Nbyte(uint8_t idx, uint16_t len, uint16_t offset, uint8_t div, uint32_t MASK) {
+       /*
+        IDEAS: N Byte prefix and suffix. Prefix will load value before start. Suffix will write any value at end because it should be done in order anyways. 
+       */
+        /* Memcpy aligned on write boundaries */
+        int tid = threadIdx.x - div * NUM_THREAD;
+        uint32_t orig_counter = __shfl_sync(MASK, counter, idx); // This is equal to the tid's counter value upon entering the function
 
-        //     // TODO: CHANGE
-        //     uint8_t num_writes = ((((len - tid * NMEMCPY) & MEMCPYLARGEMASK) + (NUM_THREAD * NMEMCPY) - 1) / (NUM_THREAD * NMEMCPY) * NMEMCPY);
-        //     if (((((len - tid * NMEMCPY + NMEMCPY) & MEMCPYLARGEMASK) + (NUM_THREAD * NMEMCPY) - 1) / (NUM_THREAD * NMEMCPY)) > ((((len - tid * NMEMCPY) & MEMCPYLARGEMASK) + (NUM_THREAD * NMEMCPY) - 1) / (NUM_THREAD * NMEMCPY)))
-        //         num_writes += (len - tid * NMEMCPY) & MEMCPYSMALLMASK;
-        //     if (tid * NMEMCPY > len) num_writes = 0;
-        //     uint32_t start_counter =  orig_counter - offset; // The place to start writing. Notice we subtract offset, not add it.
+        // prefix aligning bytes needed
+        uint8_t prefix_bytes = (uint8_t) (NMEMCPY - (orig_counter & MEMCPYSMALLMASK)) + NMEMCPY;
+        // if (prefix_bytes == NMEMCPY) prefix_bytes = 0;
+        if (prefix_bytes > len) prefix_bytes = len;
 
-        //     uint32_t read_counter = start_counter + tid * NMEMCPY; // Start reading from the original counter minus the offset
-        //     uint32_t write_counter = orig_counter + tid * NMEMCPY; // Start writing from the original counter
+        // suffix aligning bytes needed
+        uint8_t suffix_bytes = (uint8_t) ((len - prefix_bytes) & MEMCPYSMALLMASK);
+        if (prefix_bytes + suffix_bytes > len) suffix_bytes = len - prefix_bytes;
 
-        //     if(read_counter >= orig_counter){ // If we are reading from ahead of the place we are writing.
-        //             read_counter = (read_counter - orig_counter) % offset + start_counter; // Don't really know what this line does.
-        //     }
+        // Write prefix and suffix
+        uint32_t start_counter =  orig_counter - offset;
 
-        //     uint8_t num_ph =  (len +  (NUM_THREAD * NMEMCPY) - 1) / (NUM_THREAD * NMEMCPY); // The largest amount of times a thread in the warp is writing to memory.
-        //     #pragma unroll 
-        //     for(int i = 0; i < num_ph; i++){
-        //         if(num_writes - i * NMEMCPY >= NMEMCPY){ // If this thread should write. 4 bytes
-        //             // TODO: CHANGE
-        //             out_ptr[write_counter + WRITE_COL_LEN * idx] = out_ptr[read_counter + WRITE_COL_LEN * idx];
-        //             #if NMEMCPY > 1
-        //             out_ptr[write_counter + WRITE_COL_LEN * idx + 1] = out_ptr[read_counter + WRITE_COL_LEN * idx + 1];
-        //             #endif
-        //             #if NMEMCPY > 2
-        //             out_ptr[write_counter + WRITE_COL_LEN * idx + 2] = out_ptr[read_counter + WRITE_COL_LEN * idx + 2];
-        //             out_ptr[write_counter + WRITE_COL_LEN * idx + 3] = out_ptr[read_counter + WRITE_COL_LEN * idx + 3];
-        //             #endif
-        //             // 1 4 byte transaction | 4 1 byte transactions
-        //             // char4 out_ptr[idx] = // 4 1bytes read
+        uint32_t read_counter = start_counter + tid;
+        uint32_t write_counter = orig_counter + tid;
 
-        //             read_counter += NUM_THREAD * NMEMCPY; // Add the number of bytes that we wrote.
-        //             write_counter += NUM_THREAD * NMEMCPY; // Add the number of bytes that we wrote.
-        //         } 
-        //         // #if NMEMCPY > 1
-        //         else if (num_writes - i * NMEMCPY > 0) { // Write however many bytes we have left.
-        //             out_ptr[write_counter + WRITE_COL_LEN * idx] = out_ptr[read_counter + WRITE_COL_LEN * idx];
-        //             #if NMEMCPY > 2
-        //             if (num_writes - i * NMEMCPY > 1) {
-        //                 out_ptr[write_counter + WRITE_COL_LEN * idx + 1] = out_ptr[read_counter + WRITE_COL_LEN * idx + 1];
-        //             }
-        //             if (num_writes - i * NMEMCPY > 2) {
-        //                 out_ptr[write_counter + WRITE_COL_LEN * idx + 2] = out_ptr[read_counter + WRITE_COL_LEN * idx + 2];
-        //             }
-        //             #endif
-        //             read_counter += NUM_THREAD * NMEMCPY; // Add the number of bytes that we wrote.
-        //             write_counter += NUM_THREAD * NMEMCPY; // Add the number of bytes that we wrote.
+        // Recruit some threads to instead write the suffix.
+        if (threadIdx.x >= prefix_bytes && threadIdx.x < suffix_bytes + prefix_bytes) {
+          read_counter += len - suffix_bytes - prefix_bytes;
+          write_counter += len - suffix_bytes - prefix_bytes;
+        }
 
+        // Check if we need to adjust read location. Happens when offset < len.
+        if(read_counter >= orig_counter){
+          read_counter = (read_counter - orig_counter) % offset + start_counter;
+        }
 
-        //         }
-        //         // #endif
-        //         __syncwarp(); // Synchronize.
-        //     }
-        
-        //     //set the counter
-        //     if(threadIdx.x == idx)
-        //         counter += len; // Counter is by thread
-        // // }
+        // Calculate the number of times this thread has to write an N block.
+        uint8_t num_writes = ((len - prefix_bytes - suffix_bytes - tid * NMEMCPY + (NUM_THREAD * NMEMCPY) - 1) / (NUM_THREAD * NMEMCPY));
+        if (tid * NMEMCPY + prefix_bytes + suffix_bytes > len) num_writes = 0;
+
+        // Calculate the number of times that the thread with the most blocks has to write.
+        uint8_t num_ph =  (len - prefix_bytes - suffix_bytes + (NUM_THREAD * NMEMCPY) - 1) / (NUM_THREAD * NMEMCPY);
+        if (prefix_bytes + suffix_bytes > len) num_ph = 0;
+
+        // Write the prefix and the suffix by performing byte memcpy
+        if (threadIdx.x < prefix_bytes + suffix_bytes && threadIdx.x < len) {
+            out_ptr[write_counter + WRITE_COL_LEN * idx] = out_ptr[read_counter + WRITE_COL_LEN * idx];
+        }
+
+        // Change the read and write location to the N byte aligned body.
+        read_counter = start_counter + tid * NMEMCPY + prefix_bytes;
+        write_counter = orig_counter + tid * NMEMCPY + prefix_bytes;
+
+        // Adjust the read location.
+        if(read_counter >= orig_counter){
+            read_counter = (read_counter - orig_counter) % offset + start_counter;
+        }
+
+        // Recast the output array to a format with N bytes.
+        #if NMEMCPY == 2
+        uchar2* out_ptr_temp  = reinterpret_cast<uchar2*>(out_ptr);
+
+        #endif
+        #if NMEMCPY == 4
+        uchar4* out_ptr_temp  = reinterpret_cast<uchar4*>(out_ptr);
+
+        #endif
+
+        __syncwarp();
+
+        //#pragma unroll 
+        for(int i = 0; i < num_ph; i++){
+            if(i < num_writes){
+                // 1 Byte memcpy
+                #if NMEMCPY == 1
+                out_ptr[write_counter + WRITE_COL_LEN * idx] = out_ptr[read_counter + WRITE_COL_LEN * idx];
+                #endif
+
+                // 2 Byte memcpy
+                #if NMEMCPY == 2
+                #if DEBUG == 1
+                if ((write_counter + WRITE_COL_LEN * idx) % NMEMCPY != 0)
+                  printf("ERROR: Write is not properly aligned at %x\n", write_counter + WRITE_COL_LEN + idx);
+                #endif
+                if (((read_counter + WRITE_COL_LEN * idx) & MEMCPYSMALLMASK) == 0) {
+                    out_ptr_temp[(write_counter + WRITE_COL_LEN * idx) >> NMEMCPYLOG2] = out_ptr_temp[(read_counter + WRITE_COL_LEN * idx) >> NMEMCPYLOG2];
+                } else {
+                    out_ptr_temp[(write_counter + WRITE_COL_LEN * idx) >> NMEMCPYLOG2] = make_uchar2(out_ptr[read_counter + WRITE_COL_LEN * idx], out_ptr[read_counter + WRITE_COL_LEN * idx + 1]);
+                }
+                // out_ptr[write_counter + WRITE_COL_LEN * idx] = out_ptr[read_counter + WRITE_COL_LEN * idx];
+                // out_ptr[write_counter + WRITE_COL_LEN * idx + 1] = out_ptr[read_counter + WRITE_COL_LEN * idx + 1];
+                #endif
+
+                // 4 Byte memcpy
+                #if NMEMCPY == 4
+                #if DEBUG == 1
+                if ((write_counter + WRITE_COL_LEN * idx) % NMEMCPY != 0)
+                  printf("ERROR: Write is not properly aligned at %x\n", write_counter + WRITE_COL_LEN + idx);
+                #endif
+                if (((read_counter + WRITE_COL_LEN * idx) & MEMCPYSMALLMASK) == 0) {
+                    out_ptr_temp[(write_counter + WRITE_COL_LEN * idx) >> NMEMCPYLOG2] = out_ptr_temp[(read_counter + WRITE_COL_LEN * idx) >> NMEMCPYLOG2];
+                } else {
+                    out_ptr_temp[(write_counter + WRITE_COL_LEN * idx) >> NMEMCPYLOG2] = make_uchar4(out_ptr[read_counter + WRITE_COL_LEN * idx], out_ptr[read_counter + WRITE_COL_LEN * idx + 1],
+                                                                                                     out_ptr[read_counter + WRITE_COL_LEN * idx + 2], out_ptr[read_counter + WRITE_COL_LEN * idx + 3]);
+                }
+                // out_ptr[write_counter + WRITE_COL_LEN * idx] = out_ptr[read_counter + WRITE_COL_LEN * idx];
+                // out_ptr[write_counter + WRITE_COL_LEN * idx + 1] = out_ptr[read_counter + WRITE_COL_LEN * idx + 1];
+                // out_ptr[write_counter + WRITE_COL_LEN * idx + 2] = out_ptr[read_counter + WRITE_COL_LEN * idx + 2];
+                // out_ptr[write_counter + WRITE_COL_LEN * idx + 3] = out_ptr[read_counter + WRITE_COL_LEN * idx + 3];
+                #endif
+
+                // Adjust the read and write locations.
+                read_counter += NUM_THREAD * NMEMCPY;
+                write_counter += NUM_THREAD * NMEMCPY;
+            } 
+            __syncwarp();
+        }
+
+        // Debug print statements. Only for toy examples, else we flood stdout or overflow the kernel print buffer.
+        // if (threadIdx.x == 0) {
+        //     printf("B: %d B;\n", len - prefix_bytes - suffix_bytes);
+        //     printf("P: %d B;\n", prefix_bytes);
+        //     printf("E: %d B;\n", suffix_bytes);
+        //     printf("O: %d B;\n", offset);
+        // }
+        // __nanosleep(10);
+
+    
+        // Increment the counter by len. No race condition because we are using the full warp mask.
+        if(threadIdx.x == idx)
+            counter += len;
   
 
     }
@@ -659,14 +765,14 @@ __device__ void init_length_lut(inflate_lut *s_lut, const int16_t* cnt, const in
       if (code < count) {
         sym = symbols[code];
 
-	/*
+    /*
         if (sym > 256) {
          printf("sym larger\n");
-	      	int lext = g_lext[sym - 257];
+            int lext = g_lext[sym - 257];
           sym = (256 + g_lens[sym - 257]) | (((1 << lext) - 1) << (16 - 5)) | (len << (24 - 5));
           len += lext;
         }*/
-	   sym = (sym << 5) | len;
+       sym = (sym << 5) | len;
         break;
       }
       symbols += count;  // else update for next length
@@ -674,7 +780,7 @@ __device__ void init_length_lut(inflate_lut *s_lut, const int16_t* cnt, const in
       first <<= 1;
     }
     lut[bits] = sym;
-	
+    
   }
   if (!t) {
     unsigned int first = 0;
@@ -863,7 +969,7 @@ int16_t decode (input_stream<READ_COL_TYPE, in_buff_len>&  s, const int16_t* con
         s.template fetch_n_bits<uint32_t>(len, &temp);
         //printf("code: %lu count: %lu len: %i, off:%i temp:%lx \n", (unsigned long)code, (unsigned long) count ,(int) len, (int) (symbols - syms), (unsigned long) temp);
 
-	return symbols[code];
+    return symbols[code];
     }
         symbols += count;  
         first += count;
@@ -1193,25 +1299,25 @@ void decode_symbol_lut(input_stream<READ_COL_TYPE, in_buff_len>& s, queue<write_
 
     while(1){
 
-	   uint32_t next32 = 0;
+       uint32_t next32 = 0;
         s.template peek_n_bits<uint32_t>(32, &next32);
-	   uint16_t sym = (s_lut -> len_lut)[next32 & ((1 << LOG2LENLUT) - 1)];
-	   if ((uint32_t)sym < (uint32_t)(0x1 << 15)) {
+       uint16_t sym = (s_lut -> len_lut)[next32 & ((1 << LOG2LENLUT) - 1)];
+       if ((uint32_t)sym < (uint32_t)(0x1 << 15)) {
 
-		uint32_t len = sym & 0x1f;
-		int32_t temp;
-		 s.template fetch_n_bits<int32_t>(len, &temp);
-		
-		sym = (s_lut -> len_lut)[next32 & ((1 << LOG2LENLUT) - 1)];
-		sym >>= 5;
+        uint32_t len = sym & 0x1f;
+        int32_t temp;
+         s.template fetch_n_bits<int32_t>(len, &temp);
+        
+        sym = (s_lut -> len_lut)[next32 & ((1 << LOG2LENLUT) - 1)];
+        sym >>= 5;
 
 
       }
 
 
       else{
-	       sym = decode<READ_COL_TYPE, in_buff_len>(s,  s_len,  lensym_ptr);
-	   }
+           sym = decode<READ_COL_TYPE, in_buff_len>(s,  s_len,  lensym_ptr);
+       }
 
         if(sym <= 255) {
             write_queue_ele qe;
@@ -1239,27 +1345,27 @@ void decode_symbol_lut(input_stream<READ_COL_TYPE, in_buff_len>& s, queue<write_
 
             uint16_t len = extra_len + g_lens[sym - 257];
             //distance, 5bits
-    	    uint16_t sym_dist;   	
+            uint16_t sym_dist;      
 
-	    s.template peek_n_bits<uint32_t>(32, &next32);
+        s.template peek_n_bits<uint32_t>(32, &next32);
 
-	    int dist = (s_lut -> dist_lut)[next32 & ((1 << LOG2DISTLUT) - 1)];
-       	    uint32_t extra_len_dist = 0;
+        int dist = (s_lut -> dist_lut)[next32 & ((1 << LOG2DISTLUT) - 1)];
+            uint32_t extra_len_dist = 0;
 
-	    if(dist > 0){
-	    //if(false){
+        if(dist > 0){
+        //if(false){
             
-	    	uint32_t lut_len = dist & 0x1f;
-		  sym_dist = dist >> 5;
-		int32_t temp = 0;
-		s.template fetch_n_bits<int32_t>(lut_len, &temp);
+            uint32_t lut_len = dist & 0x1f;
+          sym_dist = dist >> 5;
+        int32_t temp = 0;
+        s.template fetch_n_bits<int32_t>(lut_len, &temp);
 
-	    }
-	    else{
-	    	sym_dist = decode<READ_COL_TYPE, in_buff_len>(s,  s_distcnt, s_distsym);    
-	    }
+        }
+        else{
+            sym_dist = decode<READ_COL_TYPE, in_buff_len>(s,  s_distcnt, s_distsym);    
+        }
 
-	     if(g_dext[sym_dist] != 0){
+         if(g_dext[sym_dist] != 0){
                         s.template fetch_n_bits<uint32_t>(g_dext[sym_dist], &extra_len_dist);
                 }
 
@@ -1279,8 +1385,6 @@ template <typename READ_COL_TYPE, size_t in_buff_len = 4, size_t WRITE_COL_LEN>
 __device__ 
 void decode_symbol_dw(input_stream<READ_COL_TYPE, in_buff_len>& s, decompress_output<WRITE_COL_LEN>& out, /*const dynamic_huffman* const huff_tree_ptr, unsigned buff_idx,*/
     const int16_t* const s_len, const int16_t* const lensym_ptr, const int16_t* const s_distcnt, const int16_t* const s_distsym) {
-    __shared__ MEMCPY_TYPE arr_shared[(SHARED_MEMCPY)];
-
     while(1){
 
         uint16_t sym = 0;
@@ -1328,23 +1432,21 @@ void decode_symbol_dw(input_stream<READ_COL_TYPE, in_buff_len>& s, decompress_ou
 
             //shfl sync
             len = __shfl_sync(FULL_MASK, len, 0);
-            off = __shfl_sync(FULL_MASK, off, 0);     
+            off = __shfl_sync(FULL_MASK, off, 0);  
 
-            if (off < NMEMCPY) {
-                // out.template col_memcpy_Nbyte_shared_onepack<32, MEMCPY_TYPE>(arr_shared, 0, (uint32_t)len, (uint32_t)off, 0, FULL_MASK);
-                // out.template col_memcpy_Nbyte<32>(0, (uint32_t)len, (uint32_t)off, 0, FULL_MASK);
-                out.template col_memcpy_div<32>(0, (uint32_t)len, (uint32_t)off, 0, FULL_MASK);
-            }
-            else if ((off < MEMCPY_SIZE_THRESH || len < MEMCPY_SIZE_THRESH)) {
-                out.template col_memcpy_Nbyte_shared_onepass2<32, MEMCPY_TYPE>(&arr_shared[(threadIdx.y-1)*(32)], 0, (uint32_t)len, (uint32_t)off, 0, FULL_MASK);
-            }
-            else {
-                // out.template col_memcpy_Nbyte<32>(0, (uint32_t)len, (uint32_t)off, 0, FULL_MASK);
-                out.template col_memcpy_div<32>(0, (uint32_t)len, (uint32_t)off, 0, FULL_MASK);
+            // Call the corresponding memcpy function
+            // if (off < NMEMCPY) {
+            //     // out.template col_memcpy_Nbyte_shared_onepack<32, MEMCPY_TYPE>(arr_shared, 0, (uint32_t)len, (uint32_t)off, 0, FULL_MASK);
+            //     out.template col_memcpy_Nbyte<32>(arr_shared, 0, (uint32_t)len, (uint32_t)off, 0, FULL_MASK);
+            // }
+            // else if (off < MEMCPY_SIZE_THRESH || len < MEMCPY_SIZE_THRESH) {
+            //     out.template col_memcpy_Nbyte_shared_onepass<32, MEMCPY_TYPE>(arr_shared, 0, (uint32_t)len, (uint32_t)off, 0, FULL_MASK);
+            // }
+            // else {
+            //     out.template col_memcpy_Nbyte<32>(arr_shared, 0, (uint32_t)len, (uint32_t)off, 0, FULL_MASK);
+            // }
 
-            }
-
-            // out.template col_memcpy_div<32>(0, (uint32_t)len, (uint32_t)off, 0, FULL_MASK);
+            out.template col_memcpy_div<32>(0, (uint32_t)len, (uint32_t)off, 0, FULL_MASK);
 
 
             //writing       
@@ -1358,8 +1460,8 @@ template <typename READ_COL_TYPE, size_t in_buff_len = 4, size_t WRITE_COL_LEN>
 __device__ 
 void decode_symbol_dw_lut(input_stream<READ_COL_TYPE, in_buff_len>& s, decompress_output<WRITE_COL_LEN>& out, /*const dynamic_huffman* const huff_tree_ptr, unsigned buff_idx,*/
     const int16_t* const s_len, const int16_t* const lensym_ptr, const int16_t* const s_distcnt, const int16_t* const s_distsym, inflate_lut* s_lut) {
-    __shared__ MEMCPY_TYPE arr_shared[(SHARED_MEMCPY)];
-
+    __shared__ MEMCPY_TYPE arr_shared[(SHARED_MEMCPY) * (DEBUG + 1)];
+    // int debug_flag = 0;
     while(1){
         uint32_t next32 = 0;
         uint32_t sym = 0;
@@ -1462,21 +1564,22 @@ void decode_symbol_dw_lut(input_stream<READ_COL_TYPE, in_buff_len>& s, decompres
             len = __shfl_sync(FULL_MASK, len, 0);
             off = __shfl_sync(FULL_MASK, off, 0);     
 
-            // out.template col_memcpy_div<32>(0, (uint32_t)len, (uint32_t)off, 0, FULL_MASK);
-
+            // Call the corresponding memcpy function
             if (off < NMEMCPY) {
                 // out.template col_memcpy_Nbyte_shared_onepack<32, MEMCPY_TYPE>(arr_shared, 0, (uint32_t)len, (uint32_t)off, 0, FULL_MASK);
                 // out.template col_memcpy_Nbyte<32>(0, (uint32_t)len, (uint32_t)off, 0, FULL_MASK);
                 out.template col_memcpy_div<32>(0, (uint32_t)len, (uint32_t)off, 0, FULL_MASK);
             }
             else if ((off < MEMCPY_SIZE_THRESH || len < MEMCPY_SIZE_THRESH)) {
-                out.template col_memcpy_Nbyte_shared_onepass2<32, MEMCPY_TYPE>(&arr_shared[(threadIdx.y-1)*(32)], 0, (uint32_t)len, (uint32_t)off, 0, FULL_MASK);
+                out.template col_memcpy_Nbyte_shared_onepass<32, MEMCPY_TYPE>(&arr_shared[(threadIdx.y-1)*(32)], 0, (uint32_t)len, (uint32_t)off, 0, FULL_MASK);
             }
             else {
                 // out.template col_memcpy_Nbyte<32>(0, (uint32_t)len, (uint32_t)off, 0, FULL_MASK);
                 out.template col_memcpy_div<32>(0, (uint32_t)len, (uint32_t)off, 0, FULL_MASK);
 
             }
+
+            // out.template col_memcpy_div<32>(0, (uint32_t)len, (uint32_t)off, 0, FULL_MASK);
 
 
             //writing       
@@ -1510,8 +1613,8 @@ void decoder_warp(input_stream<READ_COL_TYPE, in_buff_len>& s,  queue<write_queu
         uint32_t btype;
 
       
-	 s.template fetch_n_bits<uint32_t>(16, &btype);
-	 btype = 0;
+     s.template fetch_n_bits<uint32_t>(16, &btype);
+     btype = 0;
         do{
 
         s.template fetch_n_bits<uint32_t>(3, &btype);
@@ -1541,7 +1644,7 @@ void decoder_warp(input_stream<READ_COL_TYPE, in_buff_len>& s,  queue<write_queu
 
             decode_dynamic<READ_COL_TYPE, in_buff_len>(s, huff_tree_ptr,  (uint32_t)((sm_id * 32 + slot) * 32 + threadIdx.x), s_len, s_distcnt, s_distsym, s_off);
            
-	    decode_symbol<READ_COL_TYPE, in_buff_len>(s, mq, 
+        decode_symbol<READ_COL_TYPE, in_buff_len>(s, mq, 
                 s_len, huff_tree_ptr[((sm_id * 32 + slot) * 32 + threadIdx.x)].lensym, s_distcnt, s_distsym);
 
         }
@@ -1652,14 +1755,14 @@ void decoder_warp_lut(input_stream<READ_COL_TYPE, in_buff_len>& s,  queue<write_
                 printf("uncomp\n");
        }
         else{
-		  if(threadIdx.x < active_chunks){
+          if(threadIdx.x < active_chunks){
                 decode_dynamic<READ_COL_TYPE, in_buff_len>(s, &(s_tree->dh) ,  0, s_len, s_distcnt, s_distsym, s_off);
             }
             __syncwarp(MASK);
 
             init_length_lut (s_lut,  s_len, (s_tree->dh).lensym, threadIdx.x / NUM_SUBCHUNKS, 32 / NUM_SUBCHUNKS);
 
-	        init_distance_lut (s_lut,  s_distcnt, s_distsym, threadIdx.x / NUM_SUBCHUNKS, 32 / NUM_SUBCHUNKS);
+            init_distance_lut (s_lut,  s_distcnt, s_distsym, threadIdx.x / NUM_SUBCHUNKS, 32 / NUM_SUBCHUNKS);
 
             __syncwarp(MASK);
 
@@ -1670,14 +1773,14 @@ void decoder_warp_lut(input_stream<READ_COL_TYPE, in_buff_len>& s,  queue<write_
 
             //clear_length_lut(s_lut);
 
- 	}
+    }
 
 
     }while(blast != 1);
 
      __syncwarp(MASK);
 
-		
+        
 }
 
 template <typename READ_COL_TYPE, size_t in_buff_len, uint8_t NUM_SUBCHUNKS, size_t WRITE_COL_LEN >
@@ -1860,8 +1963,8 @@ void writer_warp(queue<write_queue_ele>& mq, decompress_output<WRITE_COL_LEN>& o
 
             deq_mask >>= f;
             deq_mask <<= f;
-       	    
-       	}
+            
+        }
         __syncwarp();
         bool check = out.counter != (CHUNK_SIZE);
         if(threadIdx.x >= active_chunks ) check = false;
@@ -2058,33 +2161,33 @@ inflate_lookup(uint8_t* comp_ptr, const uint64_t* const col_len_ptr, const uint6
 
     else if (threadIdx.y == 1) {
     
-	   inflate_lut* s_lut = test_lut;
-	   unsigned sm_id;
+       inflate_lut* s_lut = test_lut;
+       unsigned sm_id;
         uint8_t slot = 0;
-	   if(shared_flag == false){
-    		if(threadIdx.x == 0){
-       	   		sm_id = get_smid();
-       	   		slot = find_slot(sm_id, d_slot_struct);
-    		}
-        	slot = __shfl_sync(FULL_MASK, slot, 0);
-        	sm_id = __shfl_sync(FULL_MASK, sm_id, 0);
-		    s_lut = &(ds.d_lut[((sm_id * 32 + slot) * 32 + my_queue)]);
-	   }
+       if(shared_flag == false){
+            if(threadIdx.x == 0){
+                sm_id = get_smid();
+                slot = find_slot(sm_id, d_slot_struct);
+            }
+            slot = __shfl_sync(FULL_MASK, slot, 0);
+            sm_id = __shfl_sync(FULL_MASK, sm_id, 0);
+            s_lut = &(ds.d_lut[((sm_id * 32 + slot) * 32 + my_queue)]);
+       }
 
-	
-	   queue<READ_COL_TYPE> in_queue(in_queue_[my_queue], h + my_queue, t + my_queue, in_queue_size);
+    
+       queue<READ_COL_TYPE> in_queue(in_queue_[my_queue], h + my_queue, t + my_queue, in_queue_size);
         queue<write_queue_ele> out_queue(out_queue_[my_queue], out_h + my_queue, out_t + my_queue, out_queue_size);
         input_stream<READ_COL_TYPE, local_queue_size> s(&in_queue, (uint32_t)col_len, local_queue[my_queue], threadIdx.x < active_chunks);
-	
-	   decoder_warp_lut<READ_COL_TYPE, local_queue_size, NUM_SUBCHUNKS>(s, out_queue, (uint32_t) col_len, out, huff_tree_ptr, d_slot_struct, fixed_tree, shared_tree[my_queue].lencnt ,  shared_tree[my_queue].distcnt, shared_tree[my_queue].distsym , shared_tree[my_queue].off, active_chunks, &(shared_tree[my_queue]), &(s_lut[my_queue]));
+    
+       decoder_warp_lut<READ_COL_TYPE, local_queue_size, NUM_SUBCHUNKS>(s, out_queue, (uint32_t) col_len, out, huff_tree_ptr, d_slot_struct, fixed_tree, shared_tree[my_queue].lencnt ,  shared_tree[my_queue].distcnt, shared_tree[my_queue].distsym , shared_tree[my_queue].off, active_chunks, &(shared_tree[my_queue]), &(s_lut[my_queue]));
 
 
-	    __syncwarp(FULL_MASK);
-    	 if(shared_flag == false){
-    	 	if(threadIdx.x == 0){
-            		release_slot(sm_id, slot, d_slot_struct);
-       	 	}
-	   }
+        __syncwarp(FULL_MASK);
+         if(shared_flag == false){
+            if(threadIdx.x == 0){
+                    release_slot(sm_id, slot, d_slot_struct);
+            }
+       }
     }
 
     else {
@@ -2571,7 +2674,7 @@ template <typename READ_COL_TYPE, size_t WRITE_COL_LEN, uint16_t queue_depth, ui
 
 
     if(shared_tree_flag == false){
-    	    cuda_err_chk(cudaMalloc(&(d_space.d_lut), sizeof(inflate_lut) * 32 * num_sm * 32));
+            cuda_err_chk(cudaMalloc(&(d_space.d_lut), sizeof(inflate_lut) * 32 * num_sm * 32));
     }
 
     cuda_err_chk(cudaMemcpy(d_in, in, in_n_bytes, cudaMemcpyHostToDevice));
@@ -2650,7 +2753,7 @@ template <typename READ_COL_TYPE, size_t WRITE_COL_LEN, uint16_t queue_depth, ui
         //inflate_volatile<uint64_t, READ_COL_TYPE, NUM_SUBCHUNKS, queue_depth , queue_depth, 4, WRITE_COL_LEN> <<<gridD,blockD>>> (d_in, d_col_len, d_blk_offset, d_out, d_tree, d_slot_struct, d_f_tree, chunk_size, num_blk);
         //inflate_volatile2<uint64_t, READ_COL_TYPE, NUM_SUBCHUNKS, queue_depth , queue_depth, 4, WRITE_COL_LEN, shared_tree_flag> <<<gridD,blockD,shared_mem_size>>> (d_in, d_col_len, d_blk_offset, d_out, d_tree, d_slot_struct, d_space, d_f_tree, chunk_size, num_blk);
 
-	    inflate_lookup<uint32_t, READ_COL_TYPE, NUM_SUBCHUNKS, queue_depth , queue_depth, 4, WRITE_COL_LEN, shared_tree_flag> <<<gridD,blockD,shared_mem_size>>> (d_in, d_col_len, d_blk_offset, d_out, d_tree, d_slot_struct, d_space, d_f_tree, chunk_size, num_blk);
+        inflate_lookup<uint32_t, READ_COL_TYPE, NUM_SUBCHUNKS, queue_depth , queue_depth, 4, WRITE_COL_LEN, shared_tree_flag> <<<gridD,blockD,shared_mem_size>>> (d_in, d_col_len, d_blk_offset, d_out, d_tree, d_slot_struct, d_space, d_f_tree, chunk_size, num_blk);
         
 
     }
@@ -2661,12 +2764,16 @@ template <typename READ_COL_TYPE, size_t WRITE_COL_LEN, uint16_t queue_depth, ui
         dim3 blockD5(32,5,1);
                 dim3 blockD4(32,4,1);
                 dim3 blockD9(32,9,1);
+                // dim3 blockD9(32,2,1);
+
                         dim3 gridD8(num_tblk/8,1,1);
+                        // dim3 gridD8(1,1,1);
+
 
 
 
         kernel_start = std::chrono::high_resolution_clock::now();
-	   // inflate_shared<uint64_t, READ_COL_TYPE, NUM_SUBCHUNKS, queue_depth , queue_depth, 4, WRITE_COL_LEN> <<<gridD,blockD>>> (d_in, d_col_len, d_blk_offset, d_out, d_tree, d_slot_struct, d_f_tree, chunk_size, num_blk);
+       // inflate_shared<uint64_t, READ_COL_TYPE, NUM_SUBCHUNKS, queue_depth , queue_depth, 4, WRITE_COL_LEN> <<<gridD,blockD>>> (d_in, d_col_len, d_blk_offset, d_out, d_tree, d_slot_struct, d_f_tree, chunk_size, num_blk);
         
         //inflate_shared_dw<uint64_t, READ_COL_TYPE, NUM_SUBCHUNKS, queue_depth , queue_depth, 4, WRITE_COL_LEN> <<<gridD,blockD2>>> (d_in, d_col_len, d_blk_offset, d_out, d_tree, d_slot_struct, d_f_tree, chunk_size, num_blk);
        //inflate_shared_dw_2<uint64_t, READ_COL_TYPE, 1, queue_depth , 4, WRITE_COL_LEN> <<<gridD,blockD2>>> (d_in, d_col_len, d_blk_offset, d_out, d_tree, d_slot_struct, d_f_tree, chunk_size, num_blk);
