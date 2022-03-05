@@ -637,6 +637,123 @@ void decoder_warp_orig_rdw(full_warp_input_stream<COMP_COL_TYPE, in_buff_len>& s
 
 }
 
+template <typename COMP_COL_TYPE, typename DATA_TYPE, size_t in_buff_len = 4>
+__device__
+void decoder_warp_orig_rdw_analysis(full_warp_input_stream<COMP_COL_TYPE, in_buff_len>& s, uint64_t CHUNK_SIZE, DATA_TYPE* out_buf, unsigned long long* histo_len) {
+
+    uint32_t input_data_out_size = 0;
+    uint64_t out_offset = 0;
+    
+    while (input_data_out_size < CHUNK_SIZE) {
+    
+      //need to read a header
+      int32_t temp_byte = 0;
+      s.template fetch_n_bits<int32_t>(8, &temp_byte);
+
+      int8_t head_byte = (int8_t)(temp_byte & 0x00FF);
+      //head_byte = __shfl_sync(FULL_MASK, head_byte, 0);
+
+      //literals
+      if(head_byte < 0){
+        uint64_t remaining = static_cast<uint64_t>(-head_byte);
+
+        for(uint64_t i = 0; i < remaining; ++i){
+
+            DATA_TYPE value = 0;
+            int64_t offset = 0;
+
+            
+            //read var-int value
+            //bool read_next = true & (threadIdx.x == 0);
+            bool read_next = true;
+
+            
+            while(read_next){
+                temp_byte = 0;
+                s.template fetch_n_bits<int32_t>(8, &temp_byte);
+
+                int8_t in_data = 0;
+                in_data = (int8_t) (in_data | (temp_byte & 0x00FF));
+
+                if(in_data >= 0){
+                    value |= (static_cast<DATA_TYPE>(in_data) << offset);
+                    read_next = false;
+                }
+                else{
+                    value |= ((static_cast<DATA_TYPE>(in_data) & 0x7f) << offset); 
+                    offset += 7;
+                }
+            }
+
+            if(threadIdx.x == 0) {out_buf[out_offset] = value; atomicAdd(histo_len, 1);}
+            
+            out_offset++;
+            input_data_out_size+=sizeof(DATA_TYPE);
+
+        }
+
+      }
+      //compresssed data
+      else{
+            uint64_t remaining = static_cast<uint64_t>(head_byte);
+
+            temp_byte = 0;
+            s.template fetch_n_bits<int32_t>(8, &temp_byte);
+
+            int8_t delta = (int8_t) (temp_byte & 0x00FF);
+           // delta = __shfl_sync(FULL_MASK, delta, 0);
+
+            DATA_TYPE value = 0;
+            int64_t offset = 0;
+
+            
+            int32_t in_data;
+
+            while(1){
+                temp_byte = 0;
+                s.template fetch_n_bits<int32_t>(8, &temp_byte);
+
+                int8_t in_data =  (int8_t) (temp_byte & 0x00FF);
+
+                if(in_data >= 0){
+
+                    value |= (static_cast<DATA_TYPE>(in_data) << offset);
+                    break;
+                }
+                else{
+
+                    value |= ((static_cast<DATA_TYPE>(in_data) & 0x7f) << offset); 
+                    offset += 7;
+                }
+            }
+
+            //value = __shfl_sync(FULL_MASK, value, 0);
+
+
+            uint64_t next_out_offset = out_offset + remaining + 3;
+            out_offset += min((uint64_t)threadIdx.x, remaining + 3);
+
+            if(threadIdx.x == 0) atomicAdd(histo_len + 3 + remaining, 1);
+
+            //decoding the compresssed stream
+            for(uint64_t i = threadIdx.x; i < remaining + 3; i += 32, out_offset += 32){
+                
+                int64_t out_ele = value + static_cast<int64_t>(i) * delta;
+                out_buf[out_offset] =  static_cast<DATA_TYPE>(out_ele);
+
+            }
+
+            out_offset = next_out_offset;
+            input_data_out_size+= (sizeof(DATA_TYPE) * (remaining + 3));
+
+
+        }
+
+    }
+
+
+}
+
 //only one thread in a warp is decoding 
 template <typename COMP_COL_TYPE, typename DATA_TYPE, size_t in_buff_len = 4>
 __device__
@@ -848,7 +965,9 @@ inflate(uint8_t* comp_ptr, uint8_t* out, const uint64_t* const col_len_ptr, cons
 
 template <typename COMP_COL_TYPE, typename DATA_TYPE, typename OUT_COL_TYPE, int NUM_CHUNKS, uint16_t queue_size = 4, int NT = 64, int BT = 32>
 __global__ void 
-__launch_bounds__ (NT, BT)
+//__launch_bounds__ (NT, BT)
+__launch_bounds__ (NT)
+
 inflate_orig_dw(uint8_t* comp_ptr, uint8_t* out, const uint64_t* const col_len_ptr, const uint64_t* const blk_offset_ptr, uint64_t CHUNK_SIZE, int COMP_COL_LEN, uint64_t num_chunks) {
 
     __shared__ COMP_COL_TYPE in_queue_[NUM_CHUNKS][queue_size];
@@ -1056,7 +1175,8 @@ inflate_orig_multi(uint8_t* comp_ptr, uint8_t* out, const uint64_t* const col_le
 
 template <typename COMP_COL_TYPE, typename DATA_TYPE, typename OUT_COL_TYPE, int NUM_CHUNKS, uint16_t queue_size = 4, int NT = 64, int BT = 32>
 __global__ void 
-__launch_bounds__ (NT, BT)
+//__launch_bounds__ (NT, BT)
+__launch_bounds__(NT)
 inflate_orig_rdw(uint8_t* comp_ptr, uint8_t* out, const uint64_t* const col_len_ptr, const uint64_t* const blk_offset_ptr, uint64_t CHUNK_SIZE, int COMP_COL_LEN, uint64_t num_chunks) {
 
     __shared__ COMP_COL_TYPE in_queue_[NUM_CHUNKS][queue_size];
@@ -1078,11 +1198,34 @@ inflate_orig_rdw(uint8_t* comp_ptr, uint8_t* out, const uint64_t* const col_len_
 
     decoder_warp_orig_rdw<COMP_COL_TYPE, DATA_TYPE, queue_size>(s, CHUNK_SIZE, (DATA_TYPE*)(out + CHUNK_SIZE * chunk_id));
 
-
 }
 
 
+template <typename COMP_COL_TYPE, typename DATA_TYPE, typename OUT_COL_TYPE, int NUM_CHUNKS, uint16_t queue_size = 4, int NT = 64, int BT = 32>
+__global__ void 
+__launch_bounds__ (NT, BT)
+inflate_orig_rdw_analysis(uint8_t* comp_ptr, uint8_t* out, const uint64_t* const col_len_ptr, const uint64_t* const blk_offset_ptr, uint64_t CHUNK_SIZE, int COMP_COL_LEN, uint64_t num_chunks, unsigned long long* histo_len) {
 
+    __shared__ COMP_COL_TYPE in_queue_[NUM_CHUNKS][queue_size];
+
+
+    uint8_t active_chunks = NUM_CHUNKS;
+    if((blockIdx.x+1) * NUM_CHUNKS > num_chunks){
+       active_chunks = num_chunks - blockIdx.x * NUM_CHUNKS;
+    }
+  
+    int   my_queue = (threadIdx.y);
+    int   my_block_idx =  (blockIdx.x * NUM_CHUNKS + threadIdx.y);
+    uint64_t    col_len = col_len_ptr[my_block_idx];
+    __syncthreads();
+
+    full_warp_input_stream<COMP_COL_TYPE, queue_size> s(comp_ptr, col_len, blk_offset_ptr[my_block_idx] / sizeof(COMP_COL_TYPE), in_queue_[my_queue]);
+    __syncthreads();
+    unsigned int chunk_id = blockIdx.x * NUM_CHUNKS + (threadIdx.y);
+
+    decoder_warp_orig_rdw_analysis<COMP_COL_TYPE, DATA_TYPE, queue_size>(s, CHUNK_SIZE, (DATA_TYPE*)(out + CHUNK_SIZE * chunk_id, histo_len));
+
+}
 
 
 
