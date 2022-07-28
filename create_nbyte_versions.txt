@@ -1,0 +1,42 @@
+rm ./include/zlib/memcpy_4.h 
+rm ./include/zlib/memcpy_2.h 
+rm ./include/zlib/memcpy_1.h 
+rm ./include/zlib/memcpy_kernels_4.h 
+rm ./include/zlib/memcpy_kernels_2.h 
+rm ./include/zlib/memcpy_kernels_1.h 
+
+cp ./include/zlib/memcpy_8.h ./include/zlib/memcpy_4.h 
+cp ./include/zlib/memcpy_8.h ./include/zlib/memcpy_2.h 
+cp ./include/zlib/memcpy_8.h ./include/zlib/memcpy_1.h 
+cp ./include/zlib/memcpy_kernels_8.h ./include/zlib/memcpy_kernels_4.h 
+cp ./include/zlib/memcpy_kernels_8.h ./include/zlib/memcpy_kernels_2.h 
+cp ./include/zlib/memcpy_kernels_8.h ./include/zlib/memcpy_kernels_1.h 
+
+sed -i 's/_8/_4/g' ./include/zlib/memcpy_4.h 
+sed -i 's/_8/_2/g' ./include/zlib/memcpy_2.h 
+sed -i 's/_8/_1/g' ./include/zlib/memcpy_1.h 
+sed -i 's/_8/_4/g' ./include/zlib/memcpy_kernels_4.h 
+sed -i 's/_8/_2/g' ./include/zlib/memcpy_kernels_2.h 
+sed -i 's/_8/_1/g' ./include/zlib/memcpy_kernels_1.h 
+
+sed -i 's/#define NMEMCPY 8/#define NMEMCPY 4/g' ./include/zlib/memcpy_4.h
+sed -i 's/#define NMEMCPYLOG2 3/#define NMEMCPYLOG2 2/g' ./include/zlib/memcpy_4.h
+sed -i 's/#define MEMCPYLARGEMASK 0xfffffff8/#define MEMCPYLARGEMASK 0xfffffffc/g' ./include/zlib/memcpy_4.h
+sed -i 's/#define MEMCPYSMALLMASK 0x00000007/#define MEMCPYSMALLMASK 0x00000003/g' ./include/zlib/memcpy_4.h
+sed -i 's/#define FUNNEL_TYPE uint32_t/#define FUNNEL_TYPE uint32_t/g' ./include/zlib/memcpy_4.h
+sed -i 's/#define USE_EIGHT 1/#define USE_EIGHT 0/g' ./include/zlib/memcpy_4.h
+
+sed -i 's/#define NMEMCPY 8/#define NMEMCPY 2/g' ./include/zlib/memcpy_2.h
+sed -i 's/#define NMEMCPYLOG2 3/#define NMEMCPYLOG2 1/g' ./include/zlib/memcpy_2.h
+sed -i 's/#define MEMCPYLARGEMASK 0xfffffff8/#define MEMCPYLARGEMASK 0xfffffffe/g' ./include/zlib/memcpy_2.h
+sed -i 's/#define MEMCPYSMALLMASK 0x00000007/#define MEMCPYSMALLMASK 0x00000001/g' ./include/zlib/memcpy_2.h
+sed -i 's/#define FUNNEL_TYPE uint32_t/#define FUNNEL_TYPE uint16_t/g' ./include/zlib/memcpy_2.h
+sed -i 's/#define USE_EIGHT 1/#define USE_EIGHT 0/g' ./include/zlib/memcpy_2.h
+
+sed -i 's/#define NMEMCPY 8/#define NMEMCPY 1/g' ./include/zlib/memcpy_1.h
+sed -i 's/#define NMEMCPYLOG2 3/#define NMEMCPYLOG2 0/g' ./include/zlib/memcpy_1.h
+sed -i 's/#define MEMCPYLARGEMASK 0xfffffff8/#define MEMCPYLARGEMASK 0xffffffff/g' ./include/zlib/memcpy_1.h
+sed -i 's/#define MEMCPYSMALLMASK 0x00000007/#define MEMCPYSMALLMASK 0x00000000/g' ./include/zlib/memcpy_1.h
+sed -i 's/#define FUNNEL_TYPE uint32_t/#define FUNNEL_TYPE uint16_t/g' ./include/zlib/memcpy_1.h
+sed -i 's/#define USE_EIGHT 1/#define USE_EIGHT 0/g' ./include/zlib/memcpy_1.h
+
