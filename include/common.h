@@ -5,6 +5,25 @@
 #include <cstdio>
 #include <cerrno>
 
+// #define NMEMCPY 1 // Must be power of 2, acceptable = {1,2,4,8}
+// #define NMEMCPYLOG2 0
+// #define MEMCPYLARGEMASK 0xffffffff
+// #define MEMCPYSMALLMASK 0x00000000
+
+// #define NMEMCPY 2 // Must be power of 2, acceptable = {1,2,4,8}
+// #define NMEMCPYLOG2 1
+// #define MEMCPYLARGEMASK 0xfffffffe
+// #define MEMCPYSMALLMASK 0x00000001
+
+#define NMEMCPY 4 // Must be power of 2, acceptable = {1,2,4,8}
+#define NMEMCPYLOG2 2
+#define MEMCPYLARGEMASK 0xfffffffc
+#define MEMCPYSMALLMASK 0x00000003
+
+// #define NMEMCPY 8 // Must be power of 2, acceptable = {1,2,4,8}
+// #define NMEMCPYLOG2 3
+// #define MEMCPYLARGEMASK 0xfffffff8
+// #define MEMCPYSMALLMASK 0x00000007
 
 __host__ __device__
 constexpr uint32_t log2(uint32_t n) {
